@@ -1,0 +1,539 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>회의녹음</title>
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="회의녹음">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#111318">
+<link rel="apple-touch-icon" href="icon-180.png">
+<link rel="icon" href="icon-180.png">
+<link rel="manifest" href="manifest.json">
+<style>
+:root{
+  --bg:#f6f7f9;--card:#fff;--text:#16181d;--muted:#6b7280;--line:#e5e7eb;
+  --accent:#e5484d;--accent-weak:#fde8e8;--ok:#1f9d55;--ok-weak:#e3f6ec;--warn:#b45309;--warn-weak:#fef3c7;
+  --btn:#eef0f3;
+}
+@media (prefers-color-scheme:dark){:root{
+  --bg:#111318;--card:#1a1d24;--text:#eceef2;--muted:#9aa1ad;--line:#2a2f39;
+  --accent:#ff5c61;--accent-weak:#3a1d20;--ok:#3ccf7e;--ok-weak:#163024;--warn:#f5b041;--warn-weak:#3a2d14;
+  --btn:#252a33;
+}}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--text);
+  font-family:-apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Pretendard","Noto Sans KR",sans-serif;
+  -webkit-text-size-adjust:100%}
+body{padding:calc(env(safe-area-inset-top) + 16px) 16px calc(env(safe-area-inset-bottom) + 24px)}
+main{max-width:480px;margin:0 auto;display:flex;flex-direction:column;gap:14px}
+header{display:flex;align-items:center;justify-content:space-between}
+h1{font-size:20px;margin:0;letter-spacing:-.02em}
+.card{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:18px}
+label{display:block;font-size:13px;color:var(--muted);margin:0 0 6px}
+input[type=text],input[type=password],input[type=url]{width:100%;font-size:16px;padding:12px 14px;border-radius:12px;
+  border:1px solid var(--line);background:var(--bg);color:var(--text);outline:none}
+input:focus{border-color:var(--accent)}
+button{font:inherit;border:0;border-radius:12px;padding:12px 16px;background:var(--btn);color:var(--text);cursor:pointer;
+  -webkit-tap-highlight-color:transparent}
+button:disabled{opacity:.45;cursor:default}
+button.primary{background:var(--accent);color:#fff;font-weight:600}
+button.ghost{background:transparent;color:var(--muted);padding:8px 10px}
+.row{display:flex;gap:8px;align-items:center}
+.row>*{flex:1}
+.stack{display:flex;flex-direction:column;gap:12px}
+.recorder{text-align:center;padding:26px 18px 22px}
+.timer{font-size:52px;font-weight:700;font-variant-numeric:tabular-nums;letter-spacing:-.03em;margin:4px 0 2px}
+.state{font-size:14px;color:var(--muted);min-height:20px}
+.meter{height:6px;border-radius:3px;background:var(--line);overflow:hidden;margin:16px auto 22px;max-width:260px}
+.meter i{display:block;height:100%;width:0;background:var(--accent);transition:width .08s linear}
+.rec-btn{width:96px;height:96px;border-radius:50%;padding:0;background:var(--accent-weak);display:inline-flex;
+  align-items:center;justify-content:center;box-shadow:0 0 0 0 var(--accent)}
+.rec-btn span{display:block;width:44px;height:44px;border-radius:50%;background:var(--accent);transition:all .2s}
+.rec-btn.on span{width:34px;height:34px;border-radius:8px}
+.rec-btn.on{animation:pulse 1.6s infinite}
+@keyframes pulse{0%{box-shadow:0 0 0 0 color-mix(in srgb,var(--accent) 45%,transparent)}100%{box-shadow:0 0 0 18px transparent}}
+.sub-actions{margin-top:16px;display:flex;gap:8px;justify-content:center}
+.sub-actions button{flex:0 0 auto;min-width:110px}
+.hint{font-size:12.5px;color:var(--muted);line-height:1.5;margin:10px 0 0}
+.banner{border-radius:14px;padding:14px 16px;font-size:14px;line-height:1.5}
+.banner.ok{background:var(--ok-weak);color:var(--ok)}
+.banner.warn{background:var(--warn-weak);color:var(--warn)}
+.banner.err{background:var(--accent-weak);color:var(--accent)}
+.progress{height:8px;border-radius:4px;background:var(--line);overflow:hidden;margin-top:10px}
+.progress i{display:block;height:100%;width:0;background:var(--ok);transition:width .3s}
+.list{display:flex;flex-direction:column;gap:10px}
+.item{border:1px solid var(--line);border-radius:14px;padding:12px 14px}
+.item .t{font-weight:600;font-size:15px}
+.item .m{font-size:12.5px;color:var(--muted);margin:3px 0 10px}
+.item .row button{padding:9px 10px;font-size:14px}
+.section-title{font-size:13px;color:var(--muted);margin:2px 4px 0}
+.hidden{display:none!important}
+.file-btn{position:relative;overflow:hidden;text-align:center}
+.file-btn input{position:absolute;inset:0;opacity:0;cursor:pointer}
+.steps{display:flex;gap:6px;margin-top:10px;font-size:12px;color:var(--muted)}
+.steps span{flex:1;text-align:center;padding:6px 2px;border-radius:8px;background:var(--btn)}
+.steps span.on{background:var(--ok-weak);color:var(--ok);font-weight:600}
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>🎙 회의녹음</h1>
+    <button class="ghost" id="openSettings" aria-label="설정">⚙️ 설정</button>
+  </header>
+
+  <!-- 설정 -->
+  <section class="card stack hidden" id="settings">
+    <div>
+      <label for="serverUrl">서버 주소 (Apps Script 웹 앱 URL)</label>
+      <input type="url" id="serverUrl" placeholder="https://script.google.com/macros/s/.../exec" autocomplete="off">
+    </div>
+    <div>
+      <label for="password">비밀번호 (스크립트 속성 APP_PASSWORD)</label>
+      <input type="password" id="password" autocomplete="off">
+    </div>
+    <div class="row">
+      <button class="primary" id="saveSettings">저장하고 연결 확인</button>
+    </div>
+    <div id="settingsMsg"></div>
+  </section>
+
+  <!-- 녹음 -->
+  <section class="card" id="mainCard">
+    <div class="row" style="align-items:flex-end">
+      <div style="flex:3">
+        <label for="title">회의 이름</label>
+        <input type="text" id="title" maxlength="80">
+      </div>
+      <div style="flex:1.2">
+        <label for="attendees">참석 인원</label>
+        <input type="text" id="attendees" inputmode="numeric" placeholder="모름" maxlength="2">
+      </div>
+    </div>
+    <div class="recorder">
+      <div class="timer" id="timer">00:00</div>
+      <div class="state" id="state">버튼을 눌러 녹음을 시작하세요</div>
+      <div class="meter"><i id="level"></i></div>
+      <button class="rec-btn" id="recBtn" aria-label="녹음 시작"><span></span></button>
+      <div class="sub-actions">
+        <button id="pauseBtn" class="hidden">일시정지</button>
+      </div>
+    </div>
+    <p class="hint" id="hint">녹음 중에는 화면을 켜 둔 채 이 앱을 띄워 두세요. (아이폰은 화면이 꺼지거나 다른 앱으로 가면 녹음이 멈춰요)<br>
+      폰은 말하는 사람들 가운데에 두면 참석자 구분이 더 정확해요. 긴 회의는 25분마다 자동으로 나눠 처리합니다.</p>
+  </section>
+
+  <!-- 전송 상태 -->
+  <section class="card hidden" id="sendCard">
+    <div id="sendText" style="font-size:15px;font-weight:600">전송 중…</div>
+    <div class="progress"><i id="sendBar"></i></div>
+    <div class="steps" id="steps">
+      <span>전송</span><span>접수</span><span>화자·녹취</span><span>요약</span><span>텔레그램</span>
+    </div>
+    <p class="hint" id="sendHint"></p>
+  </section>
+
+  <!-- 파일 올리기 -->
+  <section class="card stack">
+    <div>
+      <div style="font-weight:600;margin-bottom:4px">이미 녹음한 파일 보내기</div>
+      <div class="hint" style="margin:0">음성메모·녹음 앱의 파일(m4a, mp3, wav 등)을 골라 같은 방식으로 받아요. 30분이 넘는 파일은 참석자 구분 정확도가 조금 낮을 수 있어요.</div>
+    </div>
+    <label class="file-btn" style="margin:0"><button tabindex="-1" style="width:100%">📁 파일 선택</button>
+      <input type="file" id="fileInput" accept="audio/*,.m4a,.mp3,.wav,.aac,.ogg,.webm,.flac">
+    </label>
+  </section>
+
+  <!-- 보내지 못한 녹음 -->
+  <div class="section-title hidden" id="pendingTitle">보내지 못한 녹음 (이 기기에 저장됨)</div>
+  <section class="list" id="pendingList"></section>
+</main>
+
+<script>
+(function () {
+  'use strict';
+  var CHUNK = 4 * 1024 * 1024;          // 4MiB (256KiB의 배수 — 서버가 Gemini에 이어 올릴 때 필요)
+  var SEGMENT_SEC = 25 * 60;            // 25분마다 구간을 나눔 (화자 구분 모델 한도 30분)
+  var MAX_BYTES = 180 * 1024 * 1024;
+  var $ = function (id) { return document.getElementById(id); };
+
+  // ── 설정 (이 기기에만 저장) ──
+  function store(k, v) { try { if (v === undefined) return localStorage.getItem(k); localStorage.setItem(k, v); } catch (e) { return null; } }
+  var cfg = { url: store('mr_url') || '', pw: store('mr_pw') || '' };
+
+  function showSettings(show) { $('settings').classList.toggle('hidden', !show); }
+  $('serverUrl').value = cfg.url; $('password').value = cfg.pw;
+  if (!cfg.url || !cfg.pw) showSettings(true);
+  $('openSettings').onclick = function () { showSettings($('settings').classList.contains('hidden')); };
+
+  $('saveSettings').onclick = function () {
+    cfg.url = $('serverUrl').value.trim(); cfg.pw = $('password').value;
+    store('mr_url', cfg.url); store('mr_pw', cfg.pw);
+    var msg = $('settingsMsg');
+    msg.className = 'banner warn'; msg.textContent = '연결 확인 중…';
+    api({ action: 'ping' }).then(function (r) {
+      msg.className = 'banner ok'; msg.textContent = '연결 성공! (녹취: ' + r.transcribeModel + ' · 요약: ' + r.model + ')';
+      setTimeout(function () { showSettings(false); msg.className = ''; msg.textContent = ''; }, 1800);
+    }).catch(function (e) { msg.className = 'banner err'; msg.textContent = '연결 실패: ' + e.message; });
+  };
+
+  function api(body) {
+    if (!cfg.url) return Promise.reject(new Error('설정에서 서버 주소를 넣어 주세요.'));
+    body.pw = cfg.pw;
+    // text/plain 으로 보내야 브라우저 사전검사(CORS preflight) 없이 Apps Script 에 닿습니다
+    return fetch(cfg.url, { method: 'POST', body: JSON.stringify(body), redirect: 'follow' })
+      .then(function (r) { return r.text(); })
+      .then(function (t) {
+        var j; try { j = JSON.parse(t); } catch (e) { throw new Error('서버 응답을 읽지 못했어요. 웹 앱 배포 시 "액세스: 모든 사용자"인지 확인하세요.'); }
+        if (!j.ok) throw new Error(j.error || '서버 오류');
+        return j;
+      });
+  }
+
+  // ── 기기 저장소 (IndexedDB): 녹음 중 10초마다 조각 저장 → 앱이 꺼져도 복구 ──
+  var dbP = new Promise(function (res, rej) {
+    var rq = indexedDB.open('meeting-recorder', 2);
+    rq.onupgradeneeded = function () {
+      var db = rq.result;
+      [].slice.call(db.objectStoreNames).forEach(function (n) { db.deleteObjectStore(n); });
+      db.createObjectStore('recs', { keyPath: 'id' });
+      db.createObjectStore('chunks', { autoIncrement: true }).createIndex('rec', 'rec');
+    };
+    rq.onsuccess = function () { res(rq.result); };
+    rq.onerror = function () { rej(rq.error); };
+  }).catch(function () { return null; });
+
+  function tx(stores, mode, fn) {
+    return dbP.then(function (db) {
+      if (!db) return null;
+      return new Promise(function (res, rej) {
+        var t = db.transaction(stores, mode), out;
+        Promise.resolve(fn(t)).then(function (v) { out = v; });
+        t.oncomplete = function () { res(out); };
+        t.onerror = function () { rej(t.error); };
+      });
+    });
+  }
+  function reqP(r) { return new Promise(function (res, rej) { r.onsuccess = function () { res(r.result); }; r.onerror = function () { rej(r.error); }; }); }
+  function putRec(rec) { return tx('recs', 'readwrite', function (t) { t.objectStore('recs').put(rec); }); }
+  function clearChunks(t, id) {
+    t.objectStore('chunks').index('rec').openKeyCursor(IDBKeyRange.only(id)).onsuccess = function (e) {
+      var c = e.target.result; if (c) { t.objectStore('chunks').delete(c.primaryKey); c.continue(); }
+    };
+  }
+  function delRec(id) { return tx(['recs', 'chunks'], 'readwrite', function (t) { t.objectStore('recs').delete(id); clearChunks(t, id); }); }
+  function allRecs() { return tx('recs', 'readonly', function (t) { return reqP(t.objectStore('recs').getAll()); }).then(function (r) { return r || []; }); }
+  function addChunk(id, seg, blob) { return tx('chunks', 'readwrite', function (t) { t.objectStore('chunks').add({ rec: id, seg: seg, blob: blob }); }); }
+  function chunksOf(id) { return tx('chunks', 'readonly', function (t) { return reqP(t.objectStore('chunks').index('rec').getAll(IDBKeyRange.only(id))); }).then(function (r) { return r || []; }); }
+
+  /** 저장된 조각들을 구간별 Blob 으로 묶음 */
+  function buildSegments(meta, chunks) {
+    var by = {};
+    chunks.forEach(function (c) { (by[c.seg] = by[c.seg] || []).push(c.blob); });
+    return Object.keys(by).map(Number).sort(function (a, b) { return a - b; }).map(function (k) {
+      var info = (meta.segInfo && meta.segInfo[k]) || {};
+      return { blob: new Blob(by[k], { type: meta.mime }), mime: meta.mime, start: info.start || k * SEGMENT_SEC, duration: info.duration || 0 };
+    });
+  }
+
+  // ── 녹음 ──
+  function defaultTitle() {
+    var d = new Date(), p = function (n) { return ('0' + n).slice(-2); };
+    return '회의 ' + (d.getMonth() + 1) + '/' + d.getDate() + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
+  }
+  $('title').value = defaultTitle();
+  $('attendees').value = store('mr_att') || '';
+
+  var rec = null;
+  function pickMime() {
+    if (!window.MediaRecorder) return null;
+    var c = ['audio/webm;codecs=opus', 'audio/mp4;codecs=mp4a.40.2', 'audio/mp4', 'audio/webm', 'audio/ogg;codecs=opus'];
+    for (var i = 0; i < c.length; i++) if (MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(c[i])) return c[i];
+    return '';
+  }
+  function fmt(sec) {
+    sec = Math.floor(sec); var h = Math.floor(sec / 3600), m = Math.floor(sec % 3600 / 60), s = sec % 60, p = function (n) { return ('0' + n).slice(-2); };
+    return (h ? h + ':' : '') + p(m) + ':' + p(s);
+  }
+  function elapsed() { return rec ? rec.elapsed + (rec.lastResume ? (Date.now() - rec.lastResume) / 1000 : 0) : 0; }
+  function setState(t) { $('state').textContent = t; }
+  function saveMeta() { if (rec) putRec(rec.meta); }
+
+  $('recBtn').onclick = function () { rec ? stopRec() : startRec(); };
+  $('pauseBtn').onclick = function () {
+    if (!rec || !rec.mr) return;
+    if (rec.mr.state === 'recording') { rec.mr.pause(); rec.elapsed = elapsed(); rec.lastResume = 0; $('pauseBtn').textContent = '이어서 녹음'; setState('일시정지됨'); }
+    else if (rec.mr.state === 'paused') { rec.mr.resume(); rec.lastResume = Date.now(); $('pauseBtn').textContent = '일시정지'; setState('녹음 중'); }
+  };
+
+  function startRec() {
+    if (!cfg.url) { showSettings(true); return; }
+    var mime = pickMime();
+    if (mime === null || !navigator.mediaDevices) { alert('이 브라우저는 녹음을 지원하지 않아요. 사파리나 크롬 최신 버전에서 열어 주세요.'); return; }
+    navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 } })
+      .then(function (stream) {
+        var id = 'r' + Date.now();
+        rec = { id: id, stream: stream, mime: mime, elapsed: 0, lastResume: Date.now(), seg: -1, segStartElapsed: 0,
+          saving: Promise.resolve(), stopping: false, mem: [],
+          meta: { id: id, title: $('title').value.trim() || defaultTitle(), attendees: attendees(), mime: mime || 'audio/webm',
+            recordedAt: new Date().toISOString(), status: 'recording', segInfo: [] } };
+        startSegment();
+        meter(stream);
+        keepAwake(true);
+        $('recBtn').classList.add('on'); $('recBtn').setAttribute('aria-label', '녹음 정지');
+        $('pauseBtn').classList.remove('hidden'); $('pauseBtn').textContent = '일시정지';
+        setState('녹음 중');
+        tick();
+      })
+      .catch(function (e) { alert('마이크를 쓸 수 없어요: ' + e.message + '\n브라우저 설정에서 마이크 권한을 허용해 주세요.'); });
+  }
+
+  /** 새 구간 시작: MediaRecorder 를 새로 만들어 구간마다 독립된 오디오 파일이 되게 함 */
+  function startSegment() {
+    var r = rec, opts = { audioBitsPerSecond: 32000 };
+    if (r.mime) opts.mimeType = r.mime;
+    var mr = new MediaRecorder(r.stream, opts), seg = ++r.seg;
+    r.meta.mime = mr.mimeType || r.meta.mime;
+    r.segStartElapsed = elapsed();
+    r.meta.segInfo[seg] = { start: Math.round(r.segStartElapsed), duration: 0 };
+    saveMeta();
+    mr.ondataavailable = function (e) {
+      if (!e.data || !e.data.size) return;
+      r.mem.push({ seg: seg, blob: e.data }); // 메모리에도 보관 (기기 저장소가 막힌 환경 대비)
+      r.saving = r.saving.then(function () { return addChunk(r.id, seg, e.data); }).catch(function () {});
+    };
+    mr.onstop = function () {
+      r.meta.segInfo[seg].duration = Math.round(elapsed() - r.segStartElapsed);
+      saveMeta();
+      if (r.stopping) finishRecording(r); else startSegment();
+    };
+    r.mr = mr;
+    mr.start(10000);
+  }
+
+  function tick() {
+    if (!rec) return;
+    var e = elapsed();
+    $('timer').textContent = fmt(e);
+    if (!rec.stopping && rec.mr && rec.mr.state === 'recording' && e - rec.segStartElapsed >= SEGMENT_SEC) {
+      rec.mr.stop(); // onstop 에서 다음 구간 시작
+    }
+    var segs = rec.seg + 1;
+    if (segs > 1 && $('state').textContent.indexOf('녹음 중') === 0) setState('녹음 중 · ' + segs + '번째 구간');
+    setTimeout(tick, 500);
+  }
+
+  function meter(stream) {
+    try {
+      var Ctx = window.AudioContext || window.webkitAudioContext;
+      var ctx = new Ctx(), src = ctx.createMediaStreamSource(stream), an = ctx.createAnalyser();
+      an.fftSize = 512; src.connect(an);
+      var buf = new Uint8Array(an.fftSize), r = rec;
+      r.ctx = ctx;
+      (function loop() {
+        if (rec !== r) return;
+        an.getByteTimeDomainData(buf);
+        var sum = 0; for (var i = 0; i < buf.length; i++) { var v = (buf[i] - 128) / 128; sum += v * v; }
+        $('level').style.width = Math.min(100, Math.sqrt(sum / buf.length) * 400) + '%';
+        requestAnimationFrame(loop);
+      })();
+    } catch (e) {}
+  }
+
+  function keepAwake(on) {
+    if (!('wakeLock' in navigator)) return;
+    if (on) navigator.wakeLock.request('screen').then(function (w) { if (rec) rec.wake = w; }).catch(function () {});
+    else if (rec && rec.wake) rec.wake.release().catch(function () {});
+  }
+  document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'visible' && rec) keepAwake(true); });
+
+  function stopRec() {
+    if (!rec || rec.stopping) return;
+    rec.stopping = true;
+    setState('마무리하는 중…');
+    if (rec.mr.state === 'paused') { rec.mr.resume(); }
+    rec.mr.stop();
+  }
+
+  function finishRecording(r) {
+    r.elapsed = elapsed(); r.lastResume = 0;
+    r.stream.getTracks().forEach(function (t) { t.stop(); });
+    try { r.ctx && r.ctx.close(); } catch (e) {}
+    keepAwake(false);
+    rec = null;
+    $('recBtn').classList.remove('on'); $('recBtn').setAttribute('aria-label', '녹음 시작');
+    $('pauseBtn').classList.add('hidden'); $('level').style.width = '0';
+    $('timer').textContent = '00:00'; setState('버튼을 눌러 녹음을 시작하세요');
+    r.meta.title = $('title').value.trim() || r.meta.title; // 녹음 중 이름을 고쳤으면 반영
+    r.meta.attendees = attendees() || r.meta.attendees;
+    $('title').value = defaultTitle();
+    r.saving.then(function () {
+      var item = r.meta;
+      item.segments = buildSegments(item, r.mem);
+      item.duration = Math.round(r.elapsed);
+      item.status = 'pending';
+      return tx(['recs', 'chunks'], 'readwrite', function (t) { t.objectStore('recs').put(item); clearChunks(t, item.id); })
+        .catch(function () {})
+        .then(function () { send(item); });
+    });
+  }
+
+  function attendees() {
+    var n = parseInt($('attendees').value, 10);
+    store('mr_att', n > 0 ? String(n) : '');
+    return n > 0 ? n : 0;
+  }
+
+  // ── 파일 선택 ──
+  $('fileInput').onchange = function () {
+    var f = this.files[0]; this.value = '';
+    if (!f) return;
+    var mime = f.type || guessMime(f.name);
+    var item = { id: 'f' + Date.now(), title: f.name.replace(/\.[^.]+$/, '').slice(0, 80) || defaultTitle(), attendees: attendees(),
+      mime: mime, recordedAt: new Date(f.lastModified || Date.now()).toISOString(), status: 'pending' };
+    durationOf(f).then(function (d) {
+      item.duration = d;
+      item.segments = [{ blob: f, mime: mime, start: 0, duration: d }];
+      return putRec(item);
+    }).then(function () { send(item); });
+  };
+  function guessMime(n) {
+    var ext = (n.split('.').pop() || '').toLowerCase();
+    return { m4a: 'audio/mp4', mp4: 'audio/mp4', mp3: 'audio/mp3', wav: 'audio/wav', aac: 'audio/aac', ogg: 'audio/ogg', webm: 'audio/webm', flac: 'audio/flac' }[ext] || 'audio/mpeg';
+  }
+  function durationOf(blob) {
+    return new Promise(function (res) {
+      var a = document.createElement('audio'), url = URL.createObjectURL(blob), fin = false;
+      var done = function (v) { if (fin) return; fin = true; URL.revokeObjectURL(url); res(v); };
+      a.preload = 'metadata'; a.onloadedmetadata = function () { done(isFinite(a.duration) ? Math.round(a.duration) : 0); };
+      a.onerror = function () { done(0); }; setTimeout(function () { done(0); }, 4000); a.src = url;
+    });
+  }
+
+  // ── 서버로 전송 ──
+  var sending = false;
+  var STEP = { upload: 0, uploading: 0, queued: 1, transcribing: 2, merging: 2, transcribed: 3, summarized: 3, done: 4 };
+  function setSteps(s) {
+    var k = STEP[s] === undefined ? 0 : STEP[s];
+    [].forEach.call($('steps').children, function (el, i) { el.classList.toggle('on', i <= k); });
+  }
+  function totalSize(item) { return (item.segments || []).reduce(function (a, s) { return a + (s.blob ? s.blob.size : 0); }, 0); }
+
+  function send(item) {
+    if (sending) { renderPending(); return; }
+    var size = totalSize(item);
+    if (!size) { alert('녹음된 내용이 없어요.'); delRec(item.id).then(renderPending); return; }
+    if (size > MAX_BYTES) { alert('파일이 너무 커요 (' + Math.round(size / 1048576) + 'MB). 180MB 이하로 나눠서 보내 주세요.'); renderPending(); return; }
+    sending = true;
+    var segs = item.segments.filter(function (s) { return s.blob && s.blob.size; });
+    var plan = segs.map(function (s) { return { mime: s.mime || item.mime, size: s.blob.size, parts: Math.ceil(s.blob.size / CHUNK), duration: s.duration, start: s.start }; });
+    var totalParts = plan.reduce(function (a, p) { return a + p.parts; }, 0), doneParts = 0;
+    $('sendCard').classList.remove('hidden');
+    $('sendText').textContent = '「' + item.title + '」 보내는 중…';
+    $('sendBar').style.width = '2%'; $('sendHint').textContent = '전송이 끝날 때까지 이 화면을 닫지 마세요.';
+    setSteps('upload');
+    var jobId;
+    api({ action: 'start', title: item.title, attendees: item.attendees || 0, recordedAt: item.recordedAt, segments: plan })
+      .then(function (r) {
+        jobId = r.jobId;
+        var p = Promise.resolve();
+        segs.forEach(function (s, si) {
+          for (var i = 0; i < plan[si].parts; i++) (function (i) {
+            p = p.then(function () { return b64(s.blob.slice(i * CHUNK, (i + 1) * CHUNK)); })
+              .then(function (data) { return retry(function () { return api({ action: 'chunk', jobId: jobId, seg: si, index: i, data: data }); }, 3); })
+              .then(function () { doneParts++; $('sendBar').style.width = Math.round(doneParts / totalParts * 95) + '%'; });
+          })(i);
+        });
+        return p;
+      })
+      .then(function () { return api({ action: 'finish', jobId: jobId }); })
+      .then(function () {
+        $('sendBar').style.width = '100%';
+        $('sendText').textContent = '✅ 접수 완료 — 「' + item.title + '」';
+        $('sendHint').textContent = '참석자 구분 → 녹취 → 요약이 끝나면 텔레그램으로 녹취본과 핵심요약이 와요. 이제 화면을 닫아도 됩니다.';
+        setSteps('queued');
+        return delRec(item.id);
+      })
+      .then(function () { sending = false; renderPending(); watch(jobId); })
+      .catch(function (e) {
+        sending = false;
+        $('sendText').textContent = '⚠️ 전송 실패';
+        $('sendHint').textContent = e.message + ' — 녹음은 이 기기에 저장되어 있어요. 아래에서 다시 보낼 수 있어요.';
+        renderPending();
+      });
+  }
+  function retry(fn, n) { return fn().catch(function (e) { if (n <= 1) throw e; return new Promise(function (r) { setTimeout(r, 2000); }).then(function () { return retry(fn, n - 1); }); }); }
+  function b64(blob) {
+    return new Promise(function (res, rej) {
+      var fr = new FileReader();
+      fr.onload = function () { res(String(fr.result).split(',')[1] || ''); };
+      fr.onerror = function () { rej(fr.error); };
+      fr.readAsDataURL(blob);
+    });
+  }
+  var watchTimer = null;
+  function watch(jobId) {
+    clearTimeout(watchTimer);
+    var tries = 0;
+    (function poll() {
+      if (++tries > 120) return;
+      api({ action: 'status', jobId: jobId }).then(function (r) {
+        if (r.status === 'error') { $('sendText').textContent = '⚠️ 처리 실패'; $('sendHint').textContent = r.error; return; }
+        setSteps(r.status);
+        if (r.status === 'done') { $('sendText').textContent = '📨 텔레그램으로 녹취본과 핵심요약을 보냈어요!'; $('sendHint').textContent = ''; return; }
+        watchTimer = setTimeout(poll, 15000);
+      }).catch(function () { watchTimer = setTimeout(poll, 30000); });
+    })();
+  }
+
+  // ── 보내지 못한 녹음 목록 ──
+  function renderPending() {
+    allRecs().then(function (recs) {
+      var list = $('pendingList'); list.innerHTML = '';
+      var items = recs.filter(function (r) { return r.status === 'pending' && totalSize(r); });
+      $('pendingTitle').classList.toggle('hidden', !items.length);
+      items.sort(function (a, b) { return a.recordedAt < b.recordedAt ? 1 : -1; }).forEach(function (r) {
+        var el = document.createElement('div'); el.className = 'item';
+        var t = document.createElement('div'); t.className = 't'; t.textContent = r.title;
+        var m = document.createElement('div'); m.className = 'm';
+        m.textContent = new Date(r.recordedAt).toLocaleString('ko-KR') + ' · ' + (r.duration ? fmt(r.duration) : '길이 미상') + ' · ' + (totalSize(r) / 1048576).toFixed(1) + 'MB';
+        var row = document.createElement('div'); row.className = 'row';
+        var b1 = document.createElement('button'); b1.className = 'primary'; b1.textContent = '다시 보내기'; b1.onclick = function () { send(r); };
+        var b2 = document.createElement('button'); b2.textContent = '파일 저장'; b2.onclick = function () { saveFiles(r); };
+        var b3 = document.createElement('button'); b3.textContent = '삭제'; b3.onclick = function () { if (confirm('이 녹음을 기기에서 지울까요? 되돌릴 수 없어요.')) delRec(r.id).then(renderPending); };
+        row.append(b1, b2, b3); el.append(t, m, row); list.append(el);
+      });
+    });
+  }
+  function saveFiles(r) {
+    r.segments.forEach(function (s, i) {
+      var mt = s.mime || r.mime;
+      var ext = /mp4|m4a|aac/.test(mt) ? 'm4a' : /ogg/.test(mt) ? 'ogg' : /mp3|mpeg/.test(mt) ? 'mp3' : /wav/.test(mt) ? 'wav' : 'webm';
+      var a = document.createElement('a'); a.href = URL.createObjectURL(s.blob);
+      a.download = r.title.replace(/[\\/:*?"<>|]/g, '_') + (r.segments.length > 1 ? '_' + (i + 1) : '') + '.' + ext;
+      document.body.append(a);
+      setTimeout(function () { a.click(); setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 1500); }, i * 800);
+    });
+  }
+
+  // 앱이 녹음 중에 꺼졌으면, 저장된 조각으로 복구
+  allRecs().then(function (recs) {
+    return Promise.all(recs.filter(function (r) { return r.status === 'recording'; }).map(function (r) {
+      return chunksOf(r.id).then(function (chunks) {
+        if (!chunks.length) return delRec(r.id);
+        r.segments = buildSegments(r, chunks);
+        r.duration = r.segments.reduce(function (a, s) { return a + (s.duration || 0); }, 0);
+        r.status = 'pending'; r.title += ' (복구됨)';
+        return tx(['recs', 'chunks'], 'readwrite', function (t) { t.objectStore('recs').put(r); clearChunks(t, r.id); });
+      });
+    }));
+  }).then(renderPending);
+
+  window.addEventListener('beforeunload', function (e) { if (rec || sending) { e.preventDefault(); e.returnValue = ''; } });
+})();
+</script>
+</body>
+</html>
