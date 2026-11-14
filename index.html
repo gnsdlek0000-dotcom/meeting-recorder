@@ -99,6 +99,11 @@ button.ghost{background:transparent;color:var(--muted);padding:8px 10px}
       <label for="password">비밀번호 (스크립트 속성 APP_PASSWORD)</label>
       <input type="password" id="password" autocomplete="off">
     </div>
+    <div>
+      <label for="vocab">단어장 (자주 쓰는 단어·이름, 쉼표로 구분)</label>
+      <textarea id="vocab" rows="4" style="width:100%;font:inherit;font-size:14px;padding:10px 12px;border-radius:12px;border:1px solid var(--line);background:var(--bg);color:var(--text);resize:vertical" placeholder="비워 두면 기본 단어장: 복음방, 따기, 센터, 교관, 구역장, 지플랜 …"></textarea>
+      <div class="hint" style="margin-top:4px">녹취에서 잘못 들린 말을 이 단어들 위주로 바로잡아요.</div>
+    </div>
     <div class="row">
       <button class="primary" id="saveSettings">저장하고 연결 확인</button>
     </div>
@@ -171,16 +176,16 @@ button.ghost{background:transparent;color:var(--muted);padding:8px 10px}
 
   // ── 설정 (이 기기에만 저장) ──
   function store(k, v) { try { if (v === undefined) return localStorage.getItem(k); localStorage.setItem(k, v); } catch (e) { return null; } }
-  var cfg = { url: store('mr_url') || '', pw: store('mr_pw') || '' };
+  var cfg = { url: store('mr_url') || '', pw: store('mr_pw') || '', vocab: store('mr_vocab') || '' };
 
   function showSettings(show) { $('settings').classList.toggle('hidden', !show); }
-  $('serverUrl').value = cfg.url; $('password').value = cfg.pw;
+  $('serverUrl').value = cfg.url; $('password').value = cfg.pw; $('vocab').value = cfg.vocab;
   if (!cfg.url || !cfg.pw) showSettings(true);
   $('openSettings').onclick = function () { showSettings($('settings').classList.contains('hidden')); };
 
   $('saveSettings').onclick = function () {
-    cfg.url = $('serverUrl').value.trim(); cfg.pw = $('password').value;
-    store('mr_url', cfg.url); store('mr_pw', cfg.pw);
+    cfg.url = $('serverUrl').value.trim(); cfg.pw = $('password').value; cfg.vocab = $('vocab').value.trim();
+    store('mr_url', cfg.url); store('mr_pw', cfg.pw); store('mr_vocab', cfg.vocab);
     var msg = $('settingsMsg');
     msg.className = 'banner warn'; msg.textContent = '연결 확인 중…';
     api({ action: 'ping' }).then(function (r) {
@@ -436,7 +441,7 @@ button.ghost{background:transparent;color:var(--muted);padding:8px 10px}
   // 녹음을 멈추면 남은 건 마지막 10초 조각뿐이라 거의 바로 접수됨. 중간에 실패하면 예전 방식(통째로 전송)으로 자동 전환
   function liveStart(r) {
     r.live = { ok: true, idx: {}, q: Promise.resolve() };
-    r.live.jobP = api({ action: 'livestart', title: r.meta.title, attendees: r.meta.attendees, recordedAt: r.meta.recordedAt, mode: r.meta.mode })
+    r.live.jobP = api({ action: 'livestart', title: r.meta.title, attendees: r.meta.attendees, recordedAt: r.meta.recordedAt, mode: r.meta.mode, vocab: cfg.vocab })
       .then(function (res) { r.meta.liveJobId = res.jobId; saveMeta(); return res.jobId; })
       .catch(function () { r.live.ok = false; return null; });
   }
@@ -553,7 +558,7 @@ button.ghost{background:transparent;color:var(--muted);padding:8px 10px}
     var jobId, c = cur = { item: item, cancelled: false }; showCancel(true);
     var stop = function () { if (c.cancelled) throw 'cancelled'; };
     if (item.liveJobId) { api({ action: 'abort', jobId: item.liveJobId }).catch(function () {}); delete item.liveJobId; }
-    api({ action: 'start', title: item.title, attendees: item.attendees || 0, recordedAt: item.recordedAt, segments: plan, mode: item.mode || mode })
+    api({ action: 'start', title: item.title, attendees: item.attendees || 0, recordedAt: item.recordedAt, segments: plan, mode: item.mode || mode, vocab: cfg.vocab })
       .then(function (r) {
         jobId = c.jobId = r.jobId;
         stop();
