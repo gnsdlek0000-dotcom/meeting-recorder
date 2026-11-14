@@ -76,6 +76,10 @@ button.ghost{background:transparent;color:var(--muted);padding:8px 10px}
 .steps{display:flex;gap:6px;margin-top:10px;font-size:12px;color:var(--muted)}
 .steps span{flex:1;text-align:center;padding:6px 2px;border-radius:8px;background:var(--btn)}
 .steps span.on{background:var(--ok-weak);color:var(--ok);font-weight:600}
+.seg{display:flex;gap:6px;margin-top:10px}
+.seg button{flex:1;padding:9px 6px;font-size:13.5px;line-height:1.3}
+.seg button.on{background:var(--ok-weak);color:var(--ok);font-weight:600;border-color:var(--ok)}
+.seg small{display:block;font-size:11.5px;font-weight:400;opacity:.8}
 </style>
 </head>
 <body>
@@ -113,6 +117,10 @@ button.ghost{background:transparent;color:var(--muted);padding:8px 10px}
         <input type="text" id="attendees" inputmode="numeric" placeholder="모름" maxlength="2">
       </div>
     </div>
+    <div class="seg" id="modeSeg">
+      <button data-mode="accurate">🎯 정확 모드<small>구분 정확 · 하루 2시간</small></button>
+      <button data-mode="fast">⏱ 긴 회의 모드<small>대략 구분 · 제한 없음</small></button>
+    </div>
     <div class="recorder">
       <div class="timer" id="timer">00:00</div>
       <div class="state" id="state">버튼을 눌러 녹음을 시작하세요</div>
@@ -123,7 +131,7 @@ button.ghost{background:transparent;color:var(--muted);padding:8px 10px}
       </div>
     </div>
     <p class="hint" id="hint">녹음 중에는 화면을 켜 둔 채 이 앱을 띄워 두세요. (아이폰은 화면이 꺼지거나 다른 앱으로 가면 녹음이 멈춰요)<br>
-      폰은 말하는 사람들 가운데에 두면 참석자 구분이 더 정확해요. 긴 회의는 25분마다 자동으로 나눠 처리합니다.</p>
+      폰은 말하는 사람들 가운데에 두면 참석자 구분이 더 정확해요. 정확 모드 한도를 다 쓰면 자동으로 긴 회의 모드처럼 처리돼요.</p>
   </section>
 
   <!-- 전송 상태 -->
@@ -134,6 +142,7 @@ button.ghost{background:transparent;color:var(--muted);padding:8px 10px}
       <span>전송</span><span>접수</span><span>화자·녹취</span><span>요약</span><span>텔레그램</span>
     </div>
     <p class="hint" id="sendHint"></p>
+    <button id="cancelBtn" class="hidden" style="width:100%;margin-top:10px">✕ 취소하기</button>
   </section>
 
   <!-- 파일 올리기 -->
@@ -255,6 +264,36 @@ button.ghost{background:transparent;color:var(--muted);padding:8px 10px}
   $('title').value = defaultTitle();
   $('attendees').value = store('mr_att') || '';
 
+  // ── 모드: 정확(전용 화자 구분 모델, 하루 약 2시간) / 긴 회의(가벼운 모델, 제한 없음) ──
+  var mode = store('mr_mode') === 'fast' ? 'fast' : 'accurate';
+  function renderMode() {
+    [].forEach.call($('modeSeg').children, function (b) { b.classList.toggle('on', b.getAttribute('data-mode') === mode); });
+  }
+  [].forEach.call($('modeSeg').children, function (b) {
+    b.onclick = function () { mode = b.getAttribute('data-mode'); store('mr_mode', mode); renderMode(); };
+  });
+  renderMode();
+
+  // ── 취소: 전송 중이거나 접수 후 처리 중인 회의를 멈춤. 녹음은 "보내지 못한 녹음"으로 돌려놓음 ──
+  var cur = null; // { item, jobId, jobP, cancelled }
+  function showCancel(on) { $('cancelBtn').classList.toggle('hidden', !on); }
+  $('cancelBtn').onclick = function () {
+    if (!cur || cur.cancelled) return;
+    if (!confirm('이 회의 처리를 취소할까요?\n텔레그램으로 보내지 않고, 녹음은 아래 "보내지 못한 녹음"에 남아서 다시 보내거나 지울 수 있어요.')) return;
+    var c = cur; c.cancelled = true;
+    clearTimeout(watchTimer); showCancel(false);
+    $('sendText').textContent = '🚫 취소했어요 — 「' + c.item.title + '」';
+    $('sendHint').textContent = '녹음은 아래 "보내지 못한 녹음"에 남아 있어요. 다시 보내거나 지울 수 있어요.';
+    $('sendBar').style.width = '0';
+    setSteps('none');
+    Promise.resolve(c.jobId || (c.jobP && c.jobP.catch(function () { return null; })))
+      .then(function (id) { if (id) return api({ action: 'cancel', jobId: id }).catch(function () {}); });
+    var it = c.item;
+    delete it.liveJobId; delete it.liveFinishing; it.status = 'pending';
+    sending = false;
+    putRec(it).catch(function () {}).then(renderPending);
+  };
+
   var rec = null;
   function pickMime() {
     if (!window.MediaRecorder) return null;
@@ -287,7 +326,7 @@ button.ghost{background:transparent;color:var(--muted);padding:8px 10px}
         rec = { id: id, stream: stream, mime: mime, elapsed: 0, lastResume: Date.now(), seg: -1, segStartElapsed: 0,
           saving: Promise.resolve(), stopping: false, mem: [],
           meta: { id: id, title: $('title').value.trim() || defaultTitle(), attendees: attendees(), mime: mime || 'audio/webm',
-            recordedAt: new Date().toISOString(), status: 'recording', segInfo: [] } };
+            recordedAt: new Date().toISOString(), status: 'recording', segInfo: [], mode: mode } };
         liveStart(rec);
         startSegment();
         meter(stream);
@@ -397,7 +436,7 @@ button.ghost{background:transparent;color:var(--muted);padding:8px 10px}
   // 녹음을 멈추면 남은 건 마지막 10초 조각뿐이라 거의 바로 접수됨. 중간에 실패하면 예전 방식(통째로 전송)으로 자동 전환
   function liveStart(r) {
     r.live = { ok: true, idx: {}, q: Promise.resolve() };
-    r.live.jobP = api({ action: 'livestart', title: r.meta.title, attendees: r.meta.attendees, recordedAt: r.meta.recordedAt })
+    r.live.jobP = api({ action: 'livestart', title: r.meta.title, attendees: r.meta.attendees, recordedAt: r.meta.recordedAt, mode: r.meta.mode })
       .then(function (res) { r.meta.liveJobId = res.jobId; saveMeta(); return res.jobId; })
       .catch(function () { r.live.ok = false; return null; });
   }
@@ -429,8 +468,10 @@ button.ghost{background:transparent;color:var(--muted);padding:8px 10px}
     $('sendHint').textContent = '녹음하면서 이미 보냈어요. 마지막 몇 초만 보내는 중이라 바로 닫아도 대부분 이어서 전달돼요.';
     setSteps('upload');
     var L = r.live, segs = r.seg + 1;
+    var c = cur = { item: item, jobP: L.jobP, cancelled: false }; showCancel(true);
     item.liveFinishing = true; putRec(item);
     L.q.then(function () {
+      if (c.cancelled) throw 'cancelled';
       if (!L.ok) throw new Error('실시간 전송 실패');
       return L.jobP;
     }).then(function (id) {
@@ -438,13 +479,16 @@ button.ghost{background:transparent;color:var(--muted);padding:8px 10px}
         return api({ action: 'finish', jobId: id, segs: segs, duration: item.duration, title: item.title, attendees: item.attendees || 0 });
       }, 3).then(function () { return id; });
     }).then(function (id) {
+      c.jobId = id;
+      if (c.cancelled) throw 'cancelled';
       kick(id); // 서버가 즉시 마지막 구간 받아쓰기 → 요약 → 텔레그램
       $('sendBar').style.width = '100%';
       $('sendText').textContent = '✅ 접수 완료 — 「' + item.title + '」';
       $('sendHint').textContent = '서버가 처리 중이에요. 화면을 닫거나 다른 앱을 써도 텔레그램으로 와요 (보통 2~3분).';
       setSteps('live');
       return delRec(item.id).then(function () { renderPending(); watch(id); });
-    }).catch(function () {
+    }).catch(function (e) {
+      if (c.cancelled || e === 'cancelled') return; // 사용자가 취소함 (취소 버튼에서 처리)
       // 실시간 전송이 중간에 끊겼으면 통째로 다시 보냄
       L.jobP.then(function (id) { if (id) api({ action: 'abort', jobId: id }).catch(function () {}); });
       delete item.liveJobId; delete item.liveFinishing;
@@ -488,7 +532,7 @@ button.ghost{background:transparent;color:var(--muted);padding:8px 10px}
   var sending = false;
   var STEP = { upload: 0, uploading: 0, queued: 1, live: 2, transcribing: 2, merging: 2, transcribed: 3, summarized: 3, done: 4 };
   function setSteps(s) {
-    var k = STEP[s] === undefined ? 0 : STEP[s];
+    var k = s === 'none' ? -1 : STEP[s] === undefined ? 0 : STEP[s];
     [].forEach.call($('steps').children, function (el, i) { el.classList.toggle('on', i <= k); });
   }
   function totalSize(item) { return (item.segments || []).reduce(function (a, s) { return a + (s.blob ? s.blob.size : 0); }, 0); }
@@ -506,11 +550,13 @@ button.ghost{background:transparent;color:var(--muted);padding:8px 10px}
     $('sendText').textContent = '「' + item.title + '」 보내는 중…';
     $('sendBar').style.width = '2%'; $('sendHint').textContent = '전송이 끝날 때까지 이 화면을 닫지 마세요.';
     setSteps('upload');
-    var jobId;
+    var jobId, c = cur = { item: item, cancelled: false }; showCancel(true);
+    var stop = function () { if (c.cancelled) throw 'cancelled'; };
     if (item.liveJobId) { api({ action: 'abort', jobId: item.liveJobId }).catch(function () {}); delete item.liveJobId; }
-    api({ action: 'start', title: item.title, attendees: item.attendees || 0, recordedAt: item.recordedAt, segments: plan })
+    api({ action: 'start', title: item.title, attendees: item.attendees || 0, recordedAt: item.recordedAt, segments: plan, mode: item.mode || mode })
       .then(function (r) {
-        jobId = r.jobId;
+        jobId = c.jobId = r.jobId;
+        stop();
         // 조각 3개씩 동시에 보냄
         var tasks = [];
         segs.forEach(function (s, si) {
@@ -518,7 +564,7 @@ button.ghost{background:transparent;color:var(--muted);padding:8px 10px}
         });
         var next = 0;
         function worker() {
-          if (next >= tasks.length) return Promise.resolve();
+          if (c.cancelled || next >= tasks.length) return Promise.resolve();
           var t = tasks[next++];
           return b64(t.s.blob.slice(t.i * CHUNK, (t.i + 1) * CHUNK))
             .then(function (data) { return retry(function () { return api({ action: 'chunk', jobId: jobId, seg: t.si, index: t.i, data: data }); }, 3); })
@@ -527,8 +573,9 @@ button.ghost{background:transparent;color:var(--muted);padding:8px 10px}
         }
         return Promise.all([worker(), worker(), worker()]);
       })
-      .then(function () { return api({ action: 'finish', jobId: jobId }); })
+      .then(function () { stop(); return api({ action: 'finish', jobId: jobId }); })
       .then(function () {
+        stop();
         kick(jobId);
         $('sendBar').style.width = '100%';
         $('sendText').textContent = '✅ 접수 완료 — 「' + item.title + '」';
@@ -538,7 +585,8 @@ button.ghost{background:transparent;color:var(--muted);padding:8px 10px}
       })
       .then(function () { sending = false; renderPending(); watch(jobId); })
       .catch(function (e) {
-        sending = false;
+        if (c.cancelled || e === 'cancelled') return; // 취소 버튼에서 처리
+        sending = false; showCancel(false);
         $('sendText').textContent = '⚠️ 전송 실패';
         $('sendHint').textContent = e.message + ' — 녹음은 이 기기에 저장되어 있어요. 아래에서 다시 보낼 수 있어요.';
         renderPending();
@@ -560,10 +608,11 @@ button.ghost{background:transparent;color:var(--muted);padding:8px 10px}
     (function poll() {
       if (++tries > 120) return;
       api({ action: 'status', jobId: jobId }).then(function (r) {
-        if (r.status === 'error') { $('sendText').textContent = '⚠️ 처리 실패'; $('sendHint').textContent = r.error; return; }
-        if (r.status === 'missing') return;
+        if (cur && cur.jobId === jobId && cur.cancelled) return;
+        if (r.status === 'error') { showCancel(false); $('sendText').textContent = '⚠️ 처리 실패'; $('sendHint').textContent = r.error; return; }
+        if (r.status === 'missing') { showCancel(false); return; }
         setSteps(r.status);
-        if (r.status === 'done') { $('sendText').textContent = '📨 텔레그램으로 녹취본과 핵심요약을 보냈어요!'; $('sendHint').textContent = ''; return; }
+        if (r.status === 'done') { showCancel(false); $('sendText').textContent = '📨 텔레그램으로 녹취본과 핵심요약을 보냈어요!'; $('sendHint').textContent = ''; return; }
         watchTimer = setTimeout(poll, 8000);
       }).catch(function () { watchTimer = setTimeout(poll, 30000); });
     })();
