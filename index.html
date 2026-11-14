@@ -156,7 +156,7 @@ button.ghost{background:transparent;color:var(--muted);padding:8px 10px}
 (function () {
   'use strict';
   var CHUNK = 4 * 1024 * 1024;          // 4MiB (256KiB의 배수 — 서버가 Gemini에 이어 올릴 때 필요)
-  var SEGMENT_SEC = 25 * 60;            // 25분마다 구간을 나눔 (화자 구분 모델 한도 30분)
+  var SEGMENT_SEC = 10 * 60;            // 10분마다 구간을 나눔 (구간들을 동시에 받아써서 빠름, 화자 구분 모델 한도 30분)
   var MAX_BYTES = 180 * 1024 * 1024;
   var $ = function (id) { return document.getElementById(id); };
 
