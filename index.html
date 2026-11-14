@@ -156,7 +156,7 @@ button.ghost{background:transparent;color:var(--muted);padding:8px 10px}
 (function () {
   'use strict';
   var CHUNK = 4 * 1024 * 1024;          // 4MiB (256KiB의 배수 — 서버가 Gemini에 이어 올릴 때 필요)
-  var SEGMENT_SEC = 10 * 60;            // 10분마다 구간을 나눔 (구간들을 동시에 받아써서 빠름, 화자 구분 모델 한도 30분)
+  var SEGMENT_SEC = 5 * 60;             // 5분마다 구간을 나눔 → 녹음하는 동안 서버가 끝난 구간부터 미리 받아씀
   var MAX_BYTES = 180 * 1024 * 1024;
   var $ = function (id) { return document.getElementById(id); };
 
@@ -183,14 +183,22 @@ button.ghost{background:transparent;color:var(--muted);padding:8px 10px}
   function api(body) {
     if (!cfg.url) return Promise.reject(new Error('설정에서 서버 주소를 넣어 주세요.'));
     body.pw = cfg.pw;
+    var payload = JSON.stringify(body);
     // text/plain 으로 보내야 브라우저 사전검사(CORS preflight) 없이 Apps Script 에 닿습니다
-    return fetch(cfg.url, { method: 'POST', body: JSON.stringify(body), redirect: 'follow' })
+    // keepalive: 화면을 끄거나 다른 앱으로 가도 이미 보낸 요청은 끝까지 전달됨 (64KB 이하만 가능)
+    return fetch(cfg.url, { method: 'POST', body: payload, redirect: 'follow', keepalive: payload.length < 60000 })
       .then(function (r) { return r.text(); })
       .then(function (t) {
         var j; try { j = JSON.parse(t); } catch (e) { throw new Error('서버 응답을 읽지 못했어요. 웹 앱 배포 시 "액세스: 모든 사용자"인지 확인하세요.'); }
         if (!j.ok) throw new Error(j.error || '서버 오류');
         return j;
       });
+  }
+  /** 서버에 "지금 바로 처리 시작"을 알림. 응답을 기다리지 않음 (화면을 닫아도 전달됨) */
+  function kick(jobId) {
+    try {
+      fetch(cfg.url, { method: 'POST', body: JSON.stringify({ action: 'kick', jobId: jobId, pw: cfg.pw }), keepalive: true, mode: 'no-cors' }).catch(function () {});
+    } catch (e) {}
   }
 
   // ── 기기 저장소 (IndexedDB): 녹음 중 10초마다 조각 저장 → 앱이 꺼져도 복구 ──
@@ -280,6 +288,7 @@ button.ghost{background:transparent;color:var(--muted);padding:8px 10px}
           saving: Promise.resolve(), stopping: false, mem: [],
           meta: { id: id, title: $('title').value.trim() || defaultTitle(), attendees: attendees(), mime: mime || 'audio/webm',
             recordedAt: new Date().toISOString(), status: 'recording', segInfo: [] } };
+        liveStart(rec);
         startSegment();
         meter(stream);
         keepAwake(true);
@@ -304,10 +313,13 @@ button.ghost{background:transparent;color:var(--muted);padding:8px 10px}
       if (!e.data || !e.data.size) return;
       r.mem.push({ seg: seg, blob: e.data }); // 메모리에도 보관 (기기 저장소가 막힌 환경 대비)
       r.saving = r.saving.then(function () { return addChunk(r.id, seg, e.data); }).catch(function () {});
+      liveChunk(r, seg, e.data); // 녹음하면서 바로 서버로
     };
     mr.onstop = function () {
-      r.meta.segInfo[seg].duration = Math.round(elapsed() - r.segStartElapsed);
+      var info = r.meta.segInfo[seg];
+      info.duration = Math.round(elapsed() - r.segStartElapsed);
       saveMeta();
+      liveSeal(r, seg, info, mr.mimeType || r.meta.mime);
       if (r.stopping) finishRecording(r); else startSegment();
     };
     r.mr = mr;
@@ -377,7 +389,66 @@ button.ghost{background:transparent;color:var(--muted);padding:8px 10px}
       item.status = 'pending';
       return tx(['recs', 'chunks'], 'readwrite', function (t) { t.objectStore('recs').put(item); clearChunks(t, item.id); })
         .catch(function () {})
-        .then(function () { send(item); });
+        .then(function () { liveFinish(r, item); });
+    });
+  }
+
+  // ── 실시간 전송: 녹음하는 동안 10초 조각을 바로 서버로 보내고, 5분 구간이 끝날 때마다 서버가 미리 받아씀 ──
+  // 녹음을 멈추면 남은 건 마지막 10초 조각뿐이라 거의 바로 접수됨. 중간에 실패하면 예전 방식(통째로 전송)으로 자동 전환
+  function liveStart(r) {
+    r.live = { ok: true, idx: {}, q: Promise.resolve() };
+    r.live.jobP = api({ action: 'livestart', title: r.meta.title, attendees: r.meta.attendees, recordedAt: r.meta.recordedAt })
+      .then(function (res) { r.meta.liveJobId = res.jobId; saveMeta(); return res.jobId; })
+      .catch(function () { r.live.ok = false; return null; });
+  }
+  function liveEnqueue(r, fn) {
+    var L = r.live;
+    L.q = L.q.then(function () {
+      if (!L.ok) return;
+      return L.jobP.then(function (id) { if (!id) throw new Error('실시간 접수 실패'); return retry(function () { return fn(id); }, 3); });
+    }).catch(function () { L.ok = false; });
+  }
+  function liveChunk(r, seg, blob) {
+    if (!r.live) return;
+    var i = r.live.idx[seg] = (r.live.idx[seg] || 0); r.live.idx[seg]++;
+    liveEnqueue(r, function (id) { return b64(blob).then(function (data) { return api({ action: 'chunk', jobId: id, seg: seg, index: i, data: data }); }); });
+  }
+  function liveSeal(r, seg, info, mime) {
+    if (!r.live) return;
+    var parts = r.live.idx[seg] || 0;
+    liveEnqueue(r, function (id) {
+      return api({ action: 'seal', jobId: id, seg: seg, parts: parts, start: info.start, duration: info.duration, mime: mime })
+        .then(function () { if (!r.stopping) kick(id); }); // 녹음 계속하는 동안 이 구간 받아쓰기 시작
+    });
+  }
+  function liveFinish(r, item) {
+    if (!r.live) { send(item); return; }
+    $('sendCard').classList.remove('hidden');
+    $('sendText').textContent = '「' + item.title + '」 접수하는 중…';
+    $('sendBar').style.width = '90%';
+    $('sendHint').textContent = '녹음하면서 이미 보냈어요. 마지막 몇 초만 보내는 중이라 바로 닫아도 대부분 이어서 전달돼요.';
+    setSteps('upload');
+    var L = r.live, segs = r.seg + 1;
+    item.liveFinishing = true; putRec(item);
+    L.q.then(function () {
+      if (!L.ok) throw new Error('실시간 전송 실패');
+      return L.jobP;
+    }).then(function (id) {
+      return retry(function () {
+        return api({ action: 'finish', jobId: id, segs: segs, duration: item.duration, title: item.title, attendees: item.attendees || 0 });
+      }, 3).then(function () { return id; });
+    }).then(function (id) {
+      kick(id); // 서버가 즉시 마지막 구간 받아쓰기 → 요약 → 텔레그램
+      $('sendBar').style.width = '100%';
+      $('sendText').textContent = '✅ 접수 완료 — 「' + item.title + '」';
+      $('sendHint').textContent = '서버가 처리 중이에요. 화면을 닫거나 다른 앱을 써도 텔레그램으로 와요 (보통 2~3분).';
+      setSteps('live');
+      return delRec(item.id).then(function () { renderPending(); watch(id); });
+    }).catch(function () {
+      // 실시간 전송이 중간에 끊겼으면 통째로 다시 보냄
+      L.jobP.then(function (id) { if (id) api({ action: 'abort', jobId: id }).catch(function () {}); });
+      delete item.liveJobId; delete item.liveFinishing;
+      send(item);
     });
   }
 
@@ -415,7 +486,7 @@ button.ghost{background:transparent;color:var(--muted);padding:8px 10px}
 
   // ── 서버로 전송 ──
   var sending = false;
-  var STEP = { upload: 0, uploading: 0, queued: 1, transcribing: 2, merging: 2, transcribed: 3, summarized: 3, done: 4 };
+  var STEP = { upload: 0, uploading: 0, queued: 1, live: 2, transcribing: 2, merging: 2, transcribed: 3, summarized: 3, done: 4 };
   function setSteps(s) {
     var k = STEP[s] === undefined ? 0 : STEP[s];
     [].forEach.call($('steps').children, function (el, i) { el.classList.toggle('on', i <= k); });
@@ -436,21 +507,29 @@ button.ghost{background:transparent;color:var(--muted);padding:8px 10px}
     $('sendBar').style.width = '2%'; $('sendHint').textContent = '전송이 끝날 때까지 이 화면을 닫지 마세요.';
     setSteps('upload');
     var jobId;
+    if (item.liveJobId) { api({ action: 'abort', jobId: item.liveJobId }).catch(function () {}); delete item.liveJobId; }
     api({ action: 'start', title: item.title, attendees: item.attendees || 0, recordedAt: item.recordedAt, segments: plan })
       .then(function (r) {
         jobId = r.jobId;
-        var p = Promise.resolve();
+        // 조각 3개씩 동시에 보냄
+        var tasks = [];
         segs.forEach(function (s, si) {
-          for (var i = 0; i < plan[si].parts; i++) (function (i) {
-            p = p.then(function () { return b64(s.blob.slice(i * CHUNK, (i + 1) * CHUNK)); })
-              .then(function (data) { return retry(function () { return api({ action: 'chunk', jobId: jobId, seg: si, index: i, data: data }); }, 3); })
-              .then(function () { doneParts++; $('sendBar').style.width = Math.round(doneParts / totalParts * 95) + '%'; });
-          })(i);
+          for (var i = 0; i < plan[si].parts; i++) tasks.push({ s: s, si: si, i: i });
         });
-        return p;
+        var next = 0;
+        function worker() {
+          if (next >= tasks.length) return Promise.resolve();
+          var t = tasks[next++];
+          return b64(t.s.blob.slice(t.i * CHUNK, (t.i + 1) * CHUNK))
+            .then(function (data) { return retry(function () { return api({ action: 'chunk', jobId: jobId, seg: t.si, index: t.i, data: data }); }, 3); })
+            .then(function () { doneParts++; $('sendBar').style.width = Math.round(doneParts / totalParts * 95) + '%'; })
+            .then(worker);
+        }
+        return Promise.all([worker(), worker(), worker()]);
       })
       .then(function () { return api({ action: 'finish', jobId: jobId }); })
       .then(function () {
+        kick(jobId);
         $('sendBar').style.width = '100%';
         $('sendText').textContent = '✅ 접수 완료 — 「' + item.title + '」';
         $('sendHint').textContent = '참석자 구분 → 녹취 → 요약이 끝나면 텔레그램으로 녹취본과 핵심요약이 와요. 이제 화면을 닫아도 됩니다.';
@@ -482,9 +561,10 @@ button.ghost{background:transparent;color:var(--muted);padding:8px 10px}
       if (++tries > 120) return;
       api({ action: 'status', jobId: jobId }).then(function (r) {
         if (r.status === 'error') { $('sendText').textContent = '⚠️ 처리 실패'; $('sendHint').textContent = r.error; return; }
+        if (r.status === 'missing') return;
         setSteps(r.status);
         if (r.status === 'done') { $('sendText').textContent = '📨 텔레그램으로 녹취본과 핵심요약을 보냈어요!'; $('sendHint').textContent = ''; return; }
-        watchTimer = setTimeout(poll, 15000);
+        watchTimer = setTimeout(poll, 8000);
       }).catch(function () { watchTimer = setTimeout(poll, 30000); });
     })();
   }
@@ -529,7 +609,18 @@ button.ghost{background:transparent;color:var(--muted);padding:8px 10px}
         r.status = 'pending'; r.title += ' (복구됨)';
         return tx(['recs', 'chunks'], 'readwrite', function (t) { t.objectStore('recs').put(r); clearChunks(t, r.id); });
       });
-    }));
+    })).then(function () {
+      // 실시간으로 이미 접수된 녹음(화면을 닫는 바람에 앱이 확인 못 한 것)은 목록에서 정리
+      return Promise.all(recs.filter(function (r) { return r.status === 'pending' && r.liveJobId && r.liveFinishing; }).map(function (r) {
+        return api({ action: 'status', jobId: r.liveJobId }).then(function (s) {
+          if (s.status === 'live') { // 마무리 요청이 서버에 못 갔음 → 다시 보냄
+            return api({ action: 'finish', jobId: r.liveJobId, segs: r.segments.length, duration: r.duration, title: r.title, attendees: r.attendees || 0 })
+              .then(function () { kick(r.liveJobId); return delRec(r.id); });
+          }
+          if (s.status !== 'missing' && s.status !== 'error') return delRec(r.id); // 이미 처리 중이거나 끝남
+        }).catch(function () {});
+      }));
+    });
   }).then(renderPending);
 
   window.addEventListener('beforeunload', function (e) { if (rec || sending) { e.preventDefault(); e.returnValue = ''; } });
