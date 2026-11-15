@@ -80,6 +80,12 @@ button.ghost{background:transparent;color:var(--muted);padding:8px 10px}
 .seg button{flex:1;padding:9px 6px;font-size:13.5px;line-height:1.3}
 .seg button.on{background:var(--ok-weak);color:var(--ok);font-weight:600;border-color:var(--ok)}
 .seg small{display:block;font-size:11.5px;font-weight:400;opacity:.8}
+.live-box{max-height:55vh;overflow-y:auto;font-size:14.5px;line-height:1.6;white-space:pre-wrap;word-break:keep-all;
+  background:var(--bg);border:1px solid var(--line);border-radius:12px;padding:12px 14px;-webkit-overflow-scrolling:touch}
+.live-box .u{margin:0 0 10px}
+.live-box .u b{font-size:12.5px;color:var(--ok);font-weight:600;margin-right:6px}
+.live-box .u small{font-size:11.5px;color:var(--muted)}
+.live-box .div{font-size:11.5px;color:var(--muted);text-align:center;margin:4px 0 10px;border-top:1px dashed var(--line);padding-top:6px}
 </style>
 </head>
 <body>
@@ -139,6 +145,20 @@ button.ghost{background:transparent;color:var(--muted);padding:8px 10px}
       폰은 말하는 사람들 가운데에 두면 참석자 구분이 더 정확해요. 정확 모드 한도를 다 쓰면 자동으로 긴 회의 모드처럼 처리돼요.</p>
   </section>
 
+  <!-- 실시간 녹취·중간 요약 -->
+  <section class="card hidden" id="liveCard">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+      <div style="font-weight:600">📝 실시간 녹취·요약</div>
+      <div class="seg" id="liveTabs" style="margin:0;flex:0 0 auto">
+        <button data-tab="sum" class="on" style="flex:none;padding:6px 12px;white-space:nowrap">중간 요약</button>
+        <button data-tab="tr" style="flex:none;padding:6px 12px;white-space:nowrap">녹취</button>
+      </div>
+    </div>
+    <div class="hint" id="liveInfo" style="margin:6px 0 10px"></div>
+    <div id="liveSum" class="live-box">아직 받아쓴 구간이 없어요.</div>
+    <div id="liveTr" class="live-box hidden"></div>
+  </section>
+
   <!-- 전송 상태 -->
   <section class="card hidden" id="sendCard">
     <div id="sendText" style="font-size:15px;font-weight:600">전송 중…</div>
@@ -171,6 +191,7 @@ button.ghost{background:transparent;color:var(--muted);padding:8px 10px}
   'use strict';
   var CHUNK = 4 * 1024 * 1024;          // 4MiB (256KiB의 배수 — 서버가 Gemini에 이어 올릴 때 필요)
   var SEGMENT_SEC = 5 * 60;             // 5분마다 구간을 나눔 → 녹음하는 동안 서버가 끝난 구간부터 미리 받아씀
+  var FIRST_SEGMENT_SEC = 2 * 60;       // 첫 구간만 2분
   var MAX_BYTES = 180 * 1024 * 1024;
   var $ = function (id) { return document.getElementById(id); };
 
@@ -291,6 +312,7 @@ button.ghost{background:transparent;color:var(--muted);padding:8px 10px}
     $('sendHint').textContent = '녹음은 아래 "보내지 못한 녹음"에 남아 있어요. 다시 보내거나 지울 수 있어요.';
     $('sendBar').style.width = '0';
     setSteps('none');
+    lvStop();
     Promise.resolve(c.jobId || (c.jobP && c.jobP.catch(function () { return null; })))
       .then(function (id) { if (id) return api({ action: 'cancel', jobId: id }).catch(function () {}); });
     var it = c.item;
@@ -333,6 +355,7 @@ button.ghost{background:transparent;color:var(--muted);padding:8px 10px}
           meta: { id: id, title: $('title').value.trim() || defaultTitle(), attendees: attendees(), mime: mime || 'audio/webm',
             recordedAt: new Date().toISOString(), status: 'recording', segInfo: [], mode: mode } };
         liveStart(rec);
+        lvStart(rec);
         startSegment();
         meter(stream);
         keepAwake(true);
@@ -374,7 +397,8 @@ button.ghost{background:transparent;color:var(--muted);padding:8px 10px}
     if (!rec) return;
     var e = elapsed();
     $('timer').textContent = fmt(e);
-    if (!rec.stopping && rec.mr && rec.mr.state === 'recording' && e - rec.segStartElapsed >= SEGMENT_SEC) {
+    var segLen = rec.seg === 0 ? FIRST_SEGMENT_SEC : SEGMENT_SEC; // 첫 구간은 짧게 → 화면에 녹취가 빨리 뜸
+    if (!rec.stopping && rec.mr && rec.mr.state === 'recording' && e - rec.segStartElapsed >= segLen) {
       rec.mr.stop(); // onstop 에서 다음 구간 시작
     }
     var segs = rec.seg + 1;
@@ -466,7 +490,7 @@ button.ghost{background:transparent;color:var(--muted);padding:8px 10px}
     });
   }
   function liveFinish(r, item) {
-    if (!r.live) { send(item); return; }
+    if (!r.live) { lvStop(); send(item); return; }
     $('sendCard').classList.remove('hidden');
     $('sendText').textContent = '「' + item.title + '」 접수하는 중…';
     $('sendBar').style.width = '90%';
@@ -497,8 +521,76 @@ button.ghost{background:transparent;color:var(--muted);padding:8px 10px}
       // 실시간 전송이 중간에 끊겼으면 통째로 다시 보냄
       L.jobP.then(function (id) { if (id) api({ action: 'abort', jobId: id }).catch(function () {}); });
       delete item.liveJobId; delete item.liveFinishing;
-      send(item);
+      lvStop(); send(item);
     });
+  }
+
+  // ── 실시간 녹취·중간 요약 화면: 서버가 구간을 받아쓰는 대로 가져와 보여 줌 ──
+  var LV = null;
+  [].forEach.call($('liveTabs').children, function (b) {
+    b.onclick = function () {
+      var tab = b.getAttribute('data-tab');
+      [].forEach.call($('liveTabs').children, function (x) { x.classList.toggle('on', x === b); });
+      $('liveSum').classList.toggle('hidden', tab !== 'sum');
+      $('liveTr').classList.toggle('hidden', tab !== 'tr');
+      if (tab === 'tr') $('liveTr').scrollTop = $('liveTr').scrollHeight;
+    };
+  });
+  function lvStart(r) {
+    lvStop();
+    LV = { r: r, have: 0, sum: 0, timer: null, prev: null };
+    $('liveCard').classList.remove('hidden');
+    $('liveSum').textContent = '첫 녹취는 녹음 시작 3~4분 뒤에 나타나요. 그 뒤로는 5분마다 새 내용이 붙어요.';
+    $('liveTr').innerHTML = '';
+    lvInfo();
+    lvTimer(20000);
+  }
+  function lvStop() {
+    if (LV) clearTimeout(LV.timer);
+    LV = null;
+    $('liveCard').classList.add('hidden');
+  }
+  function lvTimer(ms) { var me = LV; clearTimeout(me.timer); me.timer = setTimeout(function () { if (LV === me) lvPoll(); }, ms); }
+  function lvInfo(text) {
+    if (text) { $('liveInfo').textContent = text; return; }
+    var n = LV ? LV.have : 0;
+    $('liveInfo').textContent = (n ? '받아쓴 구간 ' + n + '개 · ' : '') +
+      (rec && rec === (LV && LV.r) ? '녹음하면서 5분마다 갱신돼요. ' : '최종본을 만드는 중이에요. ') +
+      '참석자 번호는 구간마다 따로 매겨지고, 최종본(텔레그램)에서 맞춰져요.';
+  }
+  function lvPoll() {
+    var me = LV, id = me.r.meta.liveJobId;
+    if (!id || document.visibilityState === 'hidden') { lvTimer(15000); return; }
+    api({ action: 'peek', jobId: id, have: me.have, sum: me.sum }).then(function (res) {
+      if (LV !== me) return;
+      (res.segs || []).forEach(lvAddSeg);
+      if (res.summary) { me.sum = res.sumNo; $('liveSum').textContent = res.summary; }
+      if (res.status === 'done') { lvInfo('✅ 최종 녹취본과 요약은 텔레그램으로 보냈어요. 이 화면은 녹음 중에 만든 중간본이에요.'); return; }
+      if (res.status === 'missing' || res.status === 'error') { lvInfo('실시간 화면을 마쳤어요. 결과는 텔레그램에서 확인하세요.'); return; }
+      lvInfo();
+      lvTimer(rec === me.r ? 30000 : 10000);
+    }).catch(function () { if (LV === me) lvTimer(30000); });
+  }
+  function lvAddSeg(seg) {
+    var me = LV, box = $('liveTr');
+    var atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
+    var d = document.createElement('div'); d.className = 'div'; d.textContent = '── ' + fmt(seg.start) + '부터 ──';
+    box.appendChild(d);
+    me.prev = null;
+    seg.lines.forEach(function (l) {
+      if (me.prev && me.prev.s === l.s && l.t - me.prev.t < 20) { me.prev.el.appendChild(document.createTextNode(' ' + l.x)); return; }
+      var u = document.createElement('div'); u.className = 'u';
+      var b = document.createElement('b'); b.textContent = '참석자 ' + l.s;
+      var sm = document.createElement('small'); sm.textContent = fmt(l.t);
+      u.appendChild(b); u.appendChild(sm); u.appendChild(document.createElement('br'));
+      u.appendChild(document.createTextNode(l.x));
+      box.appendChild(u);
+      me.prev = { s: l.s, t: l.t, el: u };
+    });
+    if (!seg.lines.length) { var e = document.createElement('div'); e.className = 'div'; e.textContent = '(말소리 없음)'; box.appendChild(e); }
+    me.have = seg.i + 1;
+    if (atBottom) box.scrollTop = box.scrollHeight;
+    if (!me.sum) $('liveSum').textContent = '녹취가 들어왔어요. 중간 요약을 만드는 중… (위 "녹취" 탭에서 바로 볼 수 있어요)';
   }
 
   function attendees() {
