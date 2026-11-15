@@ -205,7 +205,12 @@ button.ghost{background:transparent;color:var(--muted);padding:8px 10px}
   var CHUNK = 4 * 1024 * 1024;          // 4MiB (256KiB의 배수 — 서버가 Gemini에 이어 올릴 때 필요)
   var SEGMENT_SEC = 5 * 60;             // 5분마다 구간을 나눔 → 녹음하는 동안 서버가 끝난 구간부터 미리 받아씀
   var FIRST_SEGMENT_SEC = 2 * 60;       // 첫 구간만 2분
-  var MIC = { audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 } };
+  // 회의 녹음용 마이크 설정: 통화용 소음 제거·메아리 제거는 멀리 있는 사람이나 작은 목소리를 깎아 먹어서 끔
+  // (클로바노트처럼 원음 그대로 담고, 작은 목소리는 자동 음량으로 키움)
+  var MIC = { audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: true, channelCount: 1 } };
+  var BITRATE = 64000;                  // 32k → 64k: 자음(ㅅ·ㅈ·ㅊ)이 또렷해져 받아쓰기 정확도가 오름 (1시간 ≈ 29MB)
+  var CUT_WAIT_MAX = 15;                // 구간을 나눌 때 말 중간이 잘리지 않게 조용한 순간을 최대 15초까지 기다림
+  var BOOST = 2.5;                    // 압축 뒤 키우는 배율 (먼 자리 목소리용)
   var MAX_BYTES = 180 * 1024 * 1024;
   var $ = function (id) { return document.getElementById(id); };
 
@@ -375,8 +380,8 @@ button.ghost{background:transparent;color:var(--muted);padding:8px 10px}
             recordedAt: new Date().toISOString(), status: 'recording', segInfo: [], mode: mode } };
         liveStart(rec);
         lvStart(rec);
+        meter(stream); // 먼저 음량 보정 경로를 만들어 첫 구간부터 적용
         startSegment();
-        meter(stream);
         keepAwake(true);
         $('recBtn').classList.add('on'); $('recBtn').setAttribute('aria-label', '녹음 정지');
         $('pauseBtn').classList.remove('hidden'); $('pauseBtn').textContent = '일시정지';
@@ -388,12 +393,12 @@ button.ghost{background:transparent;color:var(--muted);padding:8px 10px}
 
   /** 새 구간 시작: MediaRecorder 를 새로 만들어 구간마다 독립된 오디오 파일이 되게 함 */
   function startSegment() {
-    var r = rec, opts = { audioBitsPerSecond: 32000 };
+    var r = rec, opts = { audioBitsPerSecond: BITRATE };
     var tr = r.stream.getAudioTracks()[0];
     if (!tr || tr.readyState !== 'live') { recoverMic(r); return; } // 마이크가 끊겼으면 다시 잡은 뒤 시작
     guardTrack(r);
     if (r.mime) opts.mimeType = r.mime;
-    var mr = new MediaRecorder(r.stream, opts), seg = ++r.seg;
+    var mr = new MediaRecorder(r.recStream || r.stream, opts), seg = ++r.seg;
     r.meta.mime = mr.mimeType || r.meta.mime;
     r.segStartElapsed = elapsed();
     r.meta.segInfo[seg] = { start: Math.round(r.segStartElapsed), duration: 0 };
@@ -420,26 +425,62 @@ button.ghost{background:transparent;color:var(--muted);padding:8px 10px}
     var e = elapsed();
     $('timer').textContent = fmt(e);
     var segLen = rec.seg === 0 ? FIRST_SEGMENT_SEC : SEGMENT_SEC; // 첫 구간은 짧게 → 화면에 녹취가 빨리 뜸
-    if (!rec.stopping && rec.mr && rec.mr.state === 'recording' && e - rec.segStartElapsed >= segLen) {
-      rec.mr.stop(); // onstop 에서 다음 구간 시작
+    var over = e - rec.segStartElapsed - segLen;
+    if (!rec.stopping && rec.mr && rec.mr.state === 'recording' && over >= 0) {
+      // 말하는 도중에 자르면 그 단어가 양쪽 구간에서 다 깨지므로, 0.3초 이상 조용한 순간에 자름
+      var quiet = rec.quietSince && Date.now() - rec.quietSince >= 300;
+      if (quiet || !rec.levelAt || Date.now() - rec.levelAt > 2000 || over >= CUT_WAIT_MAX) {
+        rec.mr.stop(); // onstop 에서 다음 구간 시작
+      }
     }
     var segs = rec.seg + 1;
     if (segs > 1 && $('state').textContent.indexOf('녹음 중') === 0) setState('녹음 중 · ' + segs + '번째 구간');
     setTimeout(tick, 500);
   }
 
+  /**
+   * 음량 막대 + 멀리 있는 목소리 키우기.
+   * 마이크 → 압축기(큰 소리는 줄이고 작은 소리는 상대적으로 키움) → 증폭 → 녹음.
+   * 가까운 사람과 먼 사람의 소리 크기 차이가 줄어 먼 자리 발언도 받아쓰기에 잡힘.
+   * 오디오 처리가 멈추면(아이폰 전화 수신 등) 다음 구간부터 원래 마이크 소리로 녹음.
+   */
   function meter(stream) {
+    var r = rec, myId = (r.meterId || 0) + 1;
+    r.meterId = myId; r.recStream = null;
     try {
       var Ctx = window.AudioContext || window.webkitAudioContext;
       var ctx = new Ctx(), src = ctx.createMediaStreamSource(stream), an = ctx.createAnalyser();
-      an.fftSize = 512; src.connect(an);
-      var buf = new Uint8Array(an.fftSize), r = rec;
+      an.fftSize = 512;
       r.ctx = ctx;
+      try {
+        var comp = ctx.createDynamicsCompressor();
+        comp.threshold.value = -42; comp.knee.value = 18; comp.ratio.value = 4;
+        comp.attack.value = 0.005; comp.release.value = 0.3;
+        var gain = ctx.createGain(); gain.gain.value = BOOST;
+        var dest = ctx.createMediaStreamDestination();
+        src.connect(comp); comp.connect(gain); gain.connect(dest); gain.connect(an);
+        var useBoost = function () { if (rec === r && r.meterId === myId && ctx.state === 'running') r.recStream = dest.stream; };
+        if (ctx.state !== 'running' && ctx.resume) ctx.resume().then(useBoost).catch(function () {});
+        useBoost();
+        ctx.onstatechange = function () {
+          if (rec !== r || r.meterId !== myId) return;
+          if (ctx.state === 'running') { useBoost(); return; }
+          // 처리 경로가 멈추면 녹음이 무음이 되므로 원래 마이크로 바꾸고 구간을 새로 시작
+          var was = r.recStream; r.recStream = null;
+          if (was && r.mr && r.mr.state === 'recording' && !r.stopping) r.mr.stop();
+        };
+      } catch (e2) { src.connect(an); }
+      var buf = new Uint8Array(an.fftSize);
       (function loop() {
-        if (rec !== r) return;
+        if (rec !== r || r.meterId !== myId) return;
         an.getByteTimeDomainData(buf);
         var sum = 0; for (var i = 0; i < buf.length; i++) { var v = (buf[i] - 128) / 128; sum += v * v; }
-        $('level').style.width = Math.min(100, Math.sqrt(sum / buf.length) * 400) + '%';
+        var rms = Math.sqrt(sum / buf.length), now = Date.now();
+        $('level').style.width = Math.min(100, rms * 400) + '%';
+        // 주변 소음 크기를 천천히 따라가며, 그보다 확실히 작으면 "조용함" (구간 자르는 시점 고르기용)
+        r.floor = r.floor === undefined ? rms : (rms < r.floor ? rms : r.floor * 0.998 + rms * 0.002);
+        if (rms < r.floor * 2 + 0.006) { if (!r.quietSince) r.quietSince = now; } else r.quietSince = 0;
+        r.levelAt = now;
         requestAnimationFrame(loop);
       })();
     } catch (e) {}
