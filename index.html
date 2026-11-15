@@ -86,6 +86,8 @@ button.ghost{background:transparent;color:var(--muted);padding:8px 10px}
 .live-box .u b{font-size:12.5px;color:var(--ok);font-weight:600;margin-right:6px}
 .live-box .u small{font-size:11.5px;color:var(--muted)}
 .live-box .interim{color:var(--muted)}
+.live-box .raw{color:var(--muted)}
+.live-box .div.ok{color:var(--ok);border-top-style:solid}
 .live-box .div{font-size:11.5px;color:var(--muted);text-align:center;margin:4px 0 10px;border-top:1px dashed var(--line);padding-top:6px}
 </style>
 </head>
@@ -124,10 +126,17 @@ button.ghost{background:transparent;color:var(--muted);padding:8px 10px}
         <label for="title">회의 이름</label>
         <input type="text" id="title" maxlength="80">
       </div>
-      <div style="flex:1.2">
-        <label for="attendees">참석 인원</label>
-        <input type="text" id="attendees" inputmode="numeric" placeholder="모름" maxlength="2">
+    </div>
+    <div style="margin-top:12px">
+      <label>👥 참석자 (미리 정해 두면 참석자 구분이 더 정확해요)</label>
+      <div class="row" style="align-items:center;gap:8px">
+        <button type="button" id="attMinus" style="flex:none;width:44px;padding:10px 0">−</button>
+        <input type="text" id="attendees" inputmode="numeric" placeholder="모름" maxlength="2" style="flex:none;width:64px;text-align:center;font-weight:600">
+        <button type="button" id="attPlus" style="flex:none;width:44px;padding:10px 0">+</button>
+        <span class="hint" style="margin:0">명</span>
       </div>
+      <input type="text" id="names" maxlength="300" style="margin-top:8px" placeholder="이름 (선택, 쉼표로) 예: 김민수, 이지은, 박정국, 최수리">
+      <div class="hint" style="margin-top:4px">이름을 적으면 자막·녹취에서 이름을 정확히 받아 적고, 요약에도 반영돼요. 사람 수만 적어도 돼요.</div>
     </div>
     <div class="seg" id="modeSeg">
       <button data-mode="accurate">🎯 정확 모드<small>구분 정확 · 하루 2시간</small></button>
@@ -294,6 +303,11 @@ button.ghost{background:transparent;color:var(--muted);padding:8px 10px}
   }
   $('title').value = defaultTitle();
   $('attendees').value = store('mr_att') || '';
+  $('names').value = store('mr_names') || '';
+  $('names').onchange = function () { store('mr_names', $('names').value.trim()); var n = namesList().length; if (n && !parseInt($('attendees').value, 10)) { $('attendees').value = n; attendees(); } };
+  $('attendees').onchange = function () { attendees(); };
+  $('attMinus').onclick = function () { var n = parseInt($('attendees').value, 10) || 0; $('attendees').value = n > 2 ? n - 1 : ''; attendees(); };
+  $('attPlus').onclick = function () { var n = parseInt($('attendees').value, 10) || 1; $('attendees').value = Math.min(20, n + 1); attendees(); };
 
   // ── 모드: 정확(전용 화자 구분 모델, 하루 약 2시간) / 긴 회의(가벼운 모델, 제한 없음) ──
   var mode = store('mr_mode') === 'fast' ? 'fast' : 'accurate';
@@ -357,7 +371,7 @@ button.ghost{background:transparent;color:var(--muted);padding:8px 10px}
         var id = 'r' + Date.now();
         rec = { id: id, stream: stream, mime: mime, elapsed: 0, lastResume: Date.now(), seg: -1, segStartElapsed: 0,
           saving: Promise.resolve(), stopping: false, mem: [],
-          meta: { id: id, title: $('title').value.trim() || defaultTitle(), attendees: attendees(), mime: mime || 'audio/webm',
+          meta: { id: id, title: $('title').value.trim() || defaultTitle(), attendees: attendees(), names: namesStr(), mime: mime || 'audio/webm',
             recordedAt: new Date().toISOString(), status: 'recording', segInfo: [], mode: mode } };
         liveStart(rec);
         lvStart(rec);
@@ -441,7 +455,7 @@ button.ghost{background:transparent;color:var(--muted);padding:8px 10px}
   function stopRec() {
     if (!rec || rec.stopping) return;
     rec.stopping = true;
-    if (LV && LV.r === rec) { capSummary(LV, true); capStop(LV); }
+    if (LV && LV.r === rec) { capStop(LV); capSync(LV, true); }
     setState('마무리하는 중…');
     if (rec.mr.state === 'paused') { rec.mr.resume(); }
     rec.mr.stop();
@@ -458,6 +472,7 @@ button.ghost{background:transparent;color:var(--muted);padding:8px 10px}
     $('timer').textContent = '00:00'; setState('버튼을 눌러 녹음을 시작하세요');
     r.meta.title = $('title').value.trim() || r.meta.title; // 녹음 중 이름을 고쳤으면 반영
     r.meta.attendees = attendees() || r.meta.attendees;
+    r.meta.names = namesStr() || r.meta.names;
     $('title').value = defaultTitle();
     r.saving.then(function () {
       var item = r.meta;
@@ -474,7 +489,7 @@ button.ghost{background:transparent;color:var(--muted);padding:8px 10px}
   // 녹음을 멈추면 남은 건 마지막 10초 조각뿐이라 거의 바로 접수됨. 중간에 실패하면 예전 방식(통째로 전송)으로 자동 전환
   function liveStart(r) {
     r.live = { ok: true, idx: {}, q: Promise.resolve() };
-    r.live.jobP = api({ action: 'livestart', title: r.meta.title, attendees: r.meta.attendees, recordedAt: r.meta.recordedAt, mode: r.meta.mode, vocab: cfg.vocab })
+    r.live.jobP = api({ action: 'livestart', title: r.meta.title, attendees: r.meta.attendees, names: r.meta.names, recordedAt: r.meta.recordedAt, mode: r.meta.mode, vocab: cfg.vocab })
       .then(function (res) { r.meta.liveJobId = res.jobId; saveMeta(); return res.jobId; })
       .catch(function () { r.live.ok = false; return null; });
   }
@@ -514,7 +529,7 @@ button.ghost{background:transparent;color:var(--muted);padding:8px 10px}
       return L.jobP;
     }).then(function (id) {
       return retry(function () {
-        return api({ action: 'finish', jobId: id, segs: segs, duration: item.duration, title: item.title, attendees: item.attendees || 0 });
+        return api({ action: 'finish', jobId: id, segs: segs, duration: item.duration, title: item.title, attendees: item.attendees || 0, names: item.names || '' });
       }, 3).then(function () { return id; });
     }).then(function (id) {
       c.jobId = id;
@@ -535,10 +550,12 @@ button.ghost{background:transparent;color:var(--muted);padding:8px 10px}
   }
 
   // ── 실시간 자막·중간 요약 화면 ──
-  // 자막: 브라우저 음성 인식(무료, 말하는 즉시 표시). 지원 안 되면 서버가 5분마다 받아쓴 녹취를 보여 줌
-  // 중간 요약: 자막을 90초마다 서버로 보내 가벼운 모델로 요약 (최종 녹취·요약은 그대로 텔레그램)
+  // 1) 자막: 녹음 버튼을 누르자마자 브라우저 음성 인식으로 말하는 즉시 표시 (회색 = 아직 교정 전)
+  // 2) 30초~1분마다 새 자막을 서버로 보내 AI가 오타·잘못 들린 말을 고치고(검정), 중간 요약도 같은 요청으로 갱신
+  // 3) 서버가 5분마다 정확한 녹취(참석자 구분)를 만들면 그 구간의 자막을 정확본으로 바꿔 보여 줌 (✓)
   var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
   var capWanted = store('mr_cap') !== '0';
+  var DEFAULT_VOCAB = '복음방, 따기, 센터, 센터 카드, 교관, 총괄 교관, 구역장, 부구역장, 부장, 전도 구역장, 총무부, 지플랜, S2, 섭외자, 창출, 상담사, 특강, 조례, 새신자, 전대, 조대, 호대, 동신대, 광주대, 연합대';
   var LV = null;
   function lvTab(tab) {
     [].forEach.call($('liveTabs').children, function (x) { x.classList.toggle('on', x.getAttribute('data-tab') === tab); });
@@ -550,17 +567,23 @@ button.ghost{background:transparent;color:var(--muted);padding:8px 10px}
   $('capToggle').onclick = function () {
     capWanted = !capWanted; store('mr_cap', capWanted ? '1' : '0');
     if (!LV) return;
-    if (capWanted) capStart(LV); else capStop(LV, '자막을 껐어요. 5분마다 서버 녹취로 보여 줘요.');
+    if (capWanted) capStart(LV); else capStop(LV, '자막을 껐어요. 서버가 5분마다 받아쓴 녹취로 보여 줘요.');
     lvInfo();
   };
   function lvStart(r) {
     lvStop();
-    LV = { r: r, have: 0, sum: 0, timer: null, prev: null, cap: null, capMode: false, capText: '', sumLen: 0, sumAt: 0, sumBusy: false };
+    LV = { r: r, have: 0, sum: 0, timer: null, cap: null, capMode: false, caps: [], sent: 0, accText: '', accUntil: 0,
+      sumAt: 0, sumBusy: false, sumLen: 0, syncIv: null };
     $('liveCard').classList.remove('hidden');
-    $('liveSum').textContent = '말한 내용이 조금 쌓이면 1~2분 안에 중간 요약이 나타나요.';
-    $('liveTr').innerHTML = '';
-    if (SR && capWanted) { capStart(LV); lvTab('tr'); }
-    else { $('liveSum').textContent = '첫 녹취는 녹음 시작 3~4분 뒤에 나타나요. 그 뒤로는 5분마다 새 내용이 붙어요.'; lvTab('sum'); }
+    var box = $('liveTr'); box.innerHTML = '';
+    LV.accEl = document.createElement('div'); LV.capEl = document.createElement('div');
+    box.appendChild(LV.accEl); box.appendChild(LV.capEl);
+    if (SR && capWanted) {
+      $('liveSum').textContent = '말을 시작하면 30초 안에 중간 요약이 나타나요.';
+      capStart(LV); lvTab('tr');
+    } else {
+      $('liveSum').textContent = '첫 녹취는 녹음 시작 3~4분 뒤에 나타나요. 그 뒤로는 5분마다 새 내용이 붙어요.'; lvTab('sum');
+    }
     lvInfo();
     lvTimer(20000);
   }
@@ -575,131 +598,168 @@ button.ghost{background:transparent;color:var(--muted);padding:8px 10px}
     $('capToggle').textContent = capWanted ? '자막 끄기' : '자막 켜기';
     if (text) { $('liveInfo').textContent = text; return; }
     var me = LV; if (!me) return;
-    var recNow = rec && rec === me.r;
-    if (me.cap && me.cap.on) $('liveInfo').textContent = '🔴 말하는 대로 자막이 떠요 (참석자 구분 없음, 오타 있을 수 있음). 중간 요약은 1~2분마다 갱신돼요.';
-    else if (recNow) $('liveInfo').textContent = (me.have ? '받아쓴 구간 ' + me.have + '개 · ' : '') + '서버가 5분마다 받아써서 보여 줘요. 참석자 번호는 구간마다 따로 매겨져요.';
-    else $('liveInfo').textContent = '정확한 녹취본(참석자 구분)과 요약을 만드는 중이에요. 텔레그램으로 와요.';
+    var recNow = rec && rec === me.r, n = attendees();
+    var who = n ? '참석자 ' + n + '명 · ' : '';
+    if (me.cap && me.cap.on) $('liveInfo').textContent = '🔴 ' + who + '말하는 즉시 자막(회색) → 30초 안에 AI가 오타를 고쳐 검정으로 → 5분마다 참석자가 구분된 정확한 녹취(✓)로 바뀌어요.';
+    else if (recNow) $('liveInfo').textContent = who + (me.have ? '받아쓴 구간 ' + me.have + '개 · ' : '') + '서버가 5분마다 받아써서 보여 줘요. 참석자 번호는 구간마다 따로 매겨져요.';
+    else $('liveInfo').textContent = '녹음을 마쳤어요. 정확한 녹취본(참석자 구분)과 요약을 만드는 중이에요. 텔레그램으로 와요.';
+  }
+  function vocabList() {
+    return (cfg.vocab || DEFAULT_VOCAB).split(/[,\n]/).concat(namesList()).map(function (w) { return w.trim(); }).filter(String);
   }
 
-  // 자막 (브라우저 음성 인식). 몇십 초마다 저절로 끊기므로 녹음 중엔 계속 다시 켬
+  // 자막 (브라우저 음성 인식). 몇십 초마다 저절로 끊기므로 녹음 중엔 바로 다시 켬. 끊기는 순간 들은 말도 버리지 않음
   function capStart(me) {
     if (!SR || (me.cap && me.cap.on)) return;
-    var c = me.cap = { on: true, fails: 0, rec: null, interim: null };
+    var c = me.cap = { on: true, fails: 0, rec: null, interim: null, pending: '' };
     me.capMode = true;
     var go = function () {
       if (!c.on || LV !== me || rec !== me.r) return;
       var r = c.rec = new SR();
-      r.lang = 'ko-KR'; r.continuous = true; r.interimResults = true;
+      r.lang = 'ko-KR'; r.continuous = true; r.interimResults = true; r.maxAlternatives = 1;
+      try { // 지원하는 브라우저면 단어장·이름을 더 잘 알아듣게 힌트로 줌
+        if ('phrases' in r && window.SpeechRecognitionPhrase) r.phrases = vocabList().slice(0, 100).map(function (p) { return new window.SpeechRecognitionPhrase(p, 5); });
+      } catch (e) {}
       r.onresult = function (e) {
         c.fails = 0;
         var interim = '';
         for (var i = e.resultIndex; i < e.results.length; i++) {
           var t = e.results[i][0].transcript.trim();
-          if (e.results[i].isFinal) { if (t) capAdd(me, t); } else interim += t + ' ';
+          if (e.results[i].isFinal) { if (t) capAdd(me, t); c.pending = ''; } else interim += t + ' ';
         }
-        capInterim(me, interim.trim());
+        c.pending = interim.trim();
+        capInterim(me, c.pending);
       };
       r.onerror = function (e) {
         if (e.error === 'not-allowed' || e.error === 'service-not-allowed' || e.error === 'language-not-supported')
           capStop(me, '이 기기·브라우저에서는 실시간 자막을 쓸 수 없어요. 대신 서버가 5분마다 받아쓴 녹취를 보여 줄게요.');
       };
       r.onend = function () {
+        if (c.pending) { capAdd(me, c.pending); c.pending = ''; } // 끊기기 직전에 듣던 말도 자막에 남김
         capInterim(me, '');
         if (!c.on || LV !== me || rec !== me.r) return;
-        if (++c.fails > 30) { capStop(me, '자막이 계속 끊겨서 껐어요. 서버가 5분마다 받아쓴 녹취로 보여 줄게요.'); return; }
-        setTimeout(go, 250);
+        if (++c.fails > 40) { capStop(me, '자막이 계속 끊겨서 껐어요. 서버가 5분마다 받아쓴 녹취로 보여 줄게요.'); return; }
+        setTimeout(go, 50);
       };
-      try { r.start(); } catch (e) { setTimeout(go, 1000); }
+      try { r.start(); } catch (e) { setTimeout(go, 500); }
     };
     go();
-    me.sumIv = setInterval(function () { capSummary(me, false); }, 30000);
+    me.syncIv = setInterval(function () { capSync(me, false); }, 5000);
   }
   function capStop(me, why) {
     var c = me && me.cap;
-    if (me) clearInterval(me.sumIv);
+    if (me) clearInterval(me.syncIv);
     if (!c || !c.on) return;
     c.on = false;
     try { c.rec && c.rec.abort(); } catch (e) {}
+    if (c.pending) { capAdd(me, c.pending); c.pending = ''; }
     capInterim(me, '');
     if (!why && LV === me) { $('capToggle').classList.add('hidden'); $('liveInfo').textContent = '녹음을 마쳤어요. 정확한 녹취본(참석자 구분)과 요약을 만드는 중이에요. 텔레그램으로 와요.'; }
-    if (why && LV === me) { me.capMode = false; me.have = 0; lvInfo(why); if (!me.sum) $('liveSum').textContent = '첫 녹취는 녹음 시작 3~4분 뒤에 나타나요. 그 뒤로는 5분마다 새 내용이 붙어요.'; }
+    if (why && LV === me) { me.capMode = false; lvInfo(why); if (!me.sumAt) $('liveSum').textContent = '첫 녹취는 녹음 시작 3~4분 뒤에 나타나요. 그 뒤로는 5분마다 새 내용이 붙어요.'; }
   }
   function capAdd(me, t) {
-    var box = $('liveTr'), sec = elapsed();
-    var atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 60;
-    me.capText += '[' + fmt(sec) + '] ' + t + '\n';
-    if (me.prev && me.prev.cap && sec - me.prev.t < 25 && me.prev.len < 250) {
-      me.prev.txt.appendData(' ' + t); me.prev.len += t.length;
-    } else {
-      var u = document.createElement('div'); u.className = 'u';
-      var sm = document.createElement('small'); sm.textContent = fmt(sec);
-      var txt = document.createTextNode(t);
-      u.appendChild(sm); u.appendChild(document.createElement('br')); u.appendChild(txt);
-      box.insertBefore(u, me.cap && me.cap.interim && me.cap.interim.parentNode === box ? me.cap.interim : null);
-      me.prev = { cap: true, t: sec, txt: txt, len: t.length };
-    }
+    me.caps.push({ i: me.caps.length, t: elapsed(), x: t, fx: null, done: false });
+    capRender(me);
+  }
+  // 자막 부분 다시 그리기 (정확한 녹취로 바뀐 구간은 숨김). 25초 안의 말은 한 문단으로
+  function capRender(me) {
+    if (LV !== me) return;
+    var box = $('liveTr'), atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 60;
+    var el = me.capEl; el.innerHTML = '';
+    var vis = me.caps.filter(function (c) { return c.t >= me.accUntil - 1; }), p = null;
+    if (vis.length && me.accUntil) { var d = document.createElement('div'); d.className = 'div'; d.textContent = '── 실시간 자막 ──'; el.appendChild(d); }
+    vis.forEach(function (c) {
+      if (!p || c.t - p.t > 25 || p.len > 250) {
+        p = { t: c.t, len: 0, el: document.createElement('div') }; p.el.className = 'u';
+        var sm = document.createElement('small'); sm.textContent = fmt(c.t);
+        p.el.appendChild(sm); p.el.appendChild(document.createElement('br'));
+        el.appendChild(p.el);
+      }
+      var s = document.createElement('span'); s.textContent = (p.len ? ' ' : '') + (c.fx || c.x);
+      if (!c.done) s.className = 'raw';
+      p.el.appendChild(s); p.len += (c.fx || c.x).length;
+    });
+    if (me.cap && me.cap.interim && me.cap.interim.textContent) el.appendChild(me.cap.interim);
     if (atBottom) box.scrollTop = box.scrollHeight;
   }
   function capInterim(me, t) {
-    var c = me.cap; if (!c) return;
+    var c = me.cap; if (!c || LV !== me) return;
     if (!c.interim) { c.interim = document.createElement('div'); c.interim.className = 'u interim'; }
-    var box = $('liveTr');
+    c.interim.textContent = t ? t + ' …' : '';
+    var box = $('liveTr'), atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 60;
     if (!t) { if (c.interim.parentNode) c.interim.parentNode.removeChild(c.interim); return; }
-    c.interim.textContent = t + ' …';
-    var atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 60;
-    if (c.interim.parentNode !== box) box.appendChild(c.interim);
+    if (c.interim.parentNode !== me.capEl) me.capEl.appendChild(c.interim);
     if (atBottom) box.scrollTop = box.scrollHeight;
   }
-  // 자막이 쌓이면 서버(가벼운 모델)로 중간 요약. 처음엔 조금 쌓이자마자, 그 뒤로 90초마다
-  function capSummary(me, force) {
+  // 새 자막 교정 + 중간 요약 (요청 1번). 처음 20분은 30초마다, 3시간까지 1분, 그 뒤 1분 반 (무료 한도 안에서)
+  function capSync(me, force) {
     if (LV !== me || me.sumBusy) return;
-    var len = me.capText.length, grown = len - me.sumLen;
-    if (!force && (grown < 40 || (me.sumAt && Date.now() - me.sumAt < 85000) || (!me.sumAt && len < 150))) return;
-    if (len < 30) return;
-    me.sumBusy = true; me.sumAt = Date.now(); me.sumLen = len;
-    var at = fmt(elapsed() || 0);
-    api({ action: 'livesum', text: me.capText, vocab: cfg.vocab }).then(function (res) {
-      if (LV === me && res.summary) $('liveSum').textContent = res.summary + '\n\n(' + at + ' 기준 · 자막으로 만든 중간 요약)';
-    }).catch(function () {}).then(function () { me.sumBusy = false; });
+    var now = Date.now(), sec = elapsed();
+    var gap = sec < 20 * 60 ? 30000 : sec < 3 * 3600 ? 60000 : 90000;
+    var newLines = me.caps.length - me.sent;
+    if (!force) {
+      if (!newLines) return;
+      if (me.sumAt && now - me.sumAt < gap) return;
+      if (!me.sumAt && me.caps.length < 2 && sec < 20) return; // 첫 요청: 말이 조금 쌓이자마자 (녹음 20초 안팎)
+    }
+    var from = me.sent, to = Math.min(me.caps.length, from + 80);
+    var lines = me.caps.slice(from, to).map(function (c) { return { i: c.i, x: c.x }; });
+    var ctx = me.caps.slice(Math.max(0, from - 8), from).map(function (c) { return c.fx || c.x; }).join(' ');
+    var all = me.accText + me.caps.filter(function (c) { return c.t >= me.accUntil - 1; })
+      .map(function (c) { return '[' + fmt(c.t) + '] ' + (c.fx || c.x); }).join('\n');
+    if (!lines.length && (force ? all.length < 30 : true)) return;
+    me.sumBusy = true; me.sumAt = now; me.sent = to;
+    var at = fmt(sec || 0);
+    api({ action: 'livesum', lines: lines, ctx: ctx, all: all, vocab: cfg.vocab, names: namesStr(), attendees: attendees() }).then(function (res) {
+      if (LV !== me) return;
+      var byI = {}; (res.fixed || []).forEach(function (f) { byI[f.i] = f.x; });
+      for (var k = from; k < to; k++) { var c = me.caps[k]; if (c) { if (byI[c.i]) c.fx = byI[c.i]; c.done = true; } }
+      capRender(me);
+      if (res.summary) $('liveSum').textContent = res.summary + '\n\n(' + at + ' 기준 중간 요약)';
+    }).catch(function () {
+      for (var k = from; k < to; k++) if (me.caps[k]) me.caps[k].done = true; // 교정 실패 → 원래 자막 그대로
+      capRender(me);
+    }).then(function () { me.sumBusy = false; });
   }
 
   function lvPoll() {
     var me = LV, id = me.r.meta.liveJobId;
     if (!id || document.visibilityState === 'hidden') { lvTimer(15000); return; }
-    var recNow = rec === me.r;
-    if (recNow && me.capMode) { lvTimer(30000); return; } // 자막 쓰는 동안은 서버에 물어볼 필요 없음
-    api({ action: 'peek', jobId: id, have: me.capMode ? 9999 : me.have, sum: me.capMode ? -1 : me.sum }).then(function (res) {
+    api({ action: 'peek', jobId: id, have: me.have, sum: me.capMode ? -1 : me.sum }).then(function (res) {
       if (LV !== me) return;
-      if (!me.capMode) {
-        (res.segs || []).forEach(lvAddSeg);
-        if (res.summary) { me.sum = res.sumNo; $('liveSum').textContent = res.summary; }
-      }
+      (res.segs || []).forEach(lvAddSeg);
+      if (!me.capMode && res.summary) { me.sum = res.sumNo; me.sumAt = Date.now(); $('liveSum').textContent = res.summary; }
       if (res.status === 'done') { lvInfo('✅ 정확한 녹취본(참석자 구분)과 요약을 텔레그램으로 보냈어요. 이 화면은 녹음 중에 만든 중간본이에요.'); return; }
       if (res.status === 'missing' || res.status === 'error') { lvInfo('실시간 화면을 마쳤어요. 결과는 텔레그램에서 확인하세요.'); return; }
-      lvInfo();
+      if (!(me.cap && me.cap.on) && rec === me.r) lvInfo();
       lvTimer(rec === me.r ? 30000 : 10000);
     }).catch(function () { if (LV === me) lvTimer(30000); });
   }
+  // 서버가 받아쓴 정확한 녹취(참석자 구분) 한 구간을 붙이고, 그 시간대 자막은 숨김
   function lvAddSeg(seg) {
     var me = LV, box = $('liveTr');
-    var atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
-    var d = document.createElement('div'); d.className = 'div'; d.textContent = '── ' + fmt(seg.start) + '부터 ──';
-    box.appendChild(d);
-    me.prev = null;
+    var atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 60;
+    var d = document.createElement('div'); d.className = 'div ok';
+    d.textContent = '✓ 정확한 녹취 ' + fmt(seg.start) + (seg.dur ? '~' + fmt(seg.start + seg.dur) : '') + ' (참석자 번호는 이 구간 안에서만 맞음)';
+    me.accEl.appendChild(d);
+    var prev = null;
     seg.lines.forEach(function (l) {
-      if (me.prev && me.prev.s === l.s && l.t - me.prev.t < 20) { me.prev.el.appendChild(document.createTextNode(' ' + l.x)); return; }
+      me.accText += '[' + fmt(l.t) + '] 참석자' + l.s + ': ' + l.x + '\n';
+      if (prev && prev.s === l.s && l.t - prev.t < 20) { prev.el.appendChild(document.createTextNode(' ' + l.x)); return; }
       var u = document.createElement('div'); u.className = 'u';
       var b = document.createElement('b'); b.textContent = '참석자 ' + l.s;
       var sm = document.createElement('small'); sm.textContent = fmt(l.t);
       u.appendChild(b); u.appendChild(sm); u.appendChild(document.createElement('br'));
       u.appendChild(document.createTextNode(l.x));
-      box.appendChild(u);
-      me.prev = { s: l.s, t: l.t, el: u };
+      me.accEl.appendChild(u);
+      prev = { s: l.s, t: l.t, el: u };
     });
-    if (!seg.lines.length) { var e = document.createElement('div'); e.className = 'div'; e.textContent = '(말소리 없음)'; box.appendChild(e); }
+    if (!seg.lines.length) { var e = document.createElement('div'); e.className = 'div'; e.textContent = '(말소리 없음)'; me.accEl.appendChild(e); }
     me.have = seg.i + 1;
+    me.accUntil = Math.max(me.accUntil, seg.dur ? seg.start + seg.dur : 0);
+    capRender(me);
     if (atBottom) box.scrollTop = box.scrollHeight;
-    if (!me.sum) $('liveSum').textContent = '녹취가 들어왔어요. 중간 요약을 만드는 중… (위 "자막" 탭에서 바로 볼 수 있어요)';
+    if (!me.sumAt) $('liveSum').textContent = '녹취가 들어왔어요. 중간 요약을 만드는 중… ("자막" 탭에서 바로 볼 수 있어요)';
   }
 
   // 마이크 보호: 자막(음성 인식)이 마이크를 빼앗아 녹음이 끊기면(일부 아이폰) 자막을 끄고 마이크를 다시 잡아 녹음을 이어 감
@@ -734,15 +794,18 @@ button.ghost{background:transparent;color:var(--muted);padding:8px 10px}
   function attendees() {
     var n = parseInt($('attendees').value, 10);
     store('mr_att', n > 0 ? String(n) : '');
+    if (!(n > 0)) n = namesList().length; // 사람 수를 비우고 이름만 적었으면 이름 수
     return n > 0 ? n : 0;
   }
+  function namesList() { return ($('names').value || '').split(/[,，\n]/).map(function (s) { return s.trim(); }).filter(String); }
+  function namesStr() { var s = namesList().join(', '); store('mr_names', s); return s; }
 
   // ── 파일 선택 ──
   $('fileInput').onchange = function () {
     var f = this.files[0]; this.value = '';
     if (!f) return;
     var mime = f.type || guessMime(f.name);
-    var item = { id: 'f' + Date.now(), title: f.name.replace(/\.[^.]+$/, '').slice(0, 80) || defaultTitle(), attendees: attendees(),
+    var item = { id: 'f' + Date.now(), title: f.name.replace(/\.[^.]+$/, '').slice(0, 80) || defaultTitle(), attendees: attendees(), names: namesStr(),
       mime: mime, recordedAt: new Date(f.lastModified || Date.now()).toISOString(), status: 'pending' };
     durationOf(f).then(function (d) {
       item.duration = d;
@@ -788,7 +851,7 @@ button.ghost{background:transparent;color:var(--muted);padding:8px 10px}
     var jobId, c = cur = { item: item, cancelled: false }; showCancel(true);
     var stop = function () { if (c.cancelled) throw 'cancelled'; };
     if (item.liveJobId) { api({ action: 'abort', jobId: item.liveJobId }).catch(function () {}); delete item.liveJobId; }
-    api({ action: 'start', title: item.title, attendees: item.attendees || 0, recordedAt: item.recordedAt, segments: plan, mode: item.mode || mode, vocab: cfg.vocab })
+    api({ action: 'start', title: item.title, attendees: item.attendees || 0, names: item.names || '', recordedAt: item.recordedAt, segments: plan, mode: item.mode || mode, vocab: cfg.vocab })
       .then(function (r) {
         jobId = c.jobId = r.jobId;
         stop();
