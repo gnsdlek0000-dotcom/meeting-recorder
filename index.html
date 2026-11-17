@@ -87,6 +87,9 @@ button.ghost{background:transparent;color:var(--muted);padding:8px 10px}
 .live-box .u small{font-size:11.5px;color:var(--muted)}
 .live-box .interim{color:var(--muted)}
 .live-box .raw{color:var(--muted)}
+.live-box .who,.live-box .ed,.live-box .cap{cursor:pointer}
+.live-box .who{border-bottom:1px dotted var(--ok)}
+.live-box .mine{background:rgba(255,200,0,.18);border-radius:3px}
 .live-box .div.ok{color:var(--ok);border-top-style:solid}
 .live-box .div{font-size:11.5px;color:var(--muted);text-align:center;margin:4px 0 10px;border-top:1px dashed var(--line);padding-top:6px}
 </style>
@@ -113,6 +116,10 @@ button.ghost{background:transparent;color:var(--muted);padding:8px 10px}
       <textarea id="vocab" rows="4" style="width:100%;font:inherit;font-size:14px;padding:10px 12px;border-radius:12px;border:1px solid var(--line);background:var(--bg);color:var(--text);resize:vertical" placeholder="비워 두면 기본 단어장: 복음방, 따기, 센터, 교관, 구역장, 지플랜 …"></textarea>
       <div class="hint" style="margin-top:4px">녹취에서 잘못 들린 말을 이 단어들 위주로 바로잡아요.</div>
     </div>
+    <div>
+      <label>📚 녹음하면서 배운 단어 <span class="hint" style="margin:0">(두 번 이상 나온 단어부터 교정에 써요 · ✕로 지우기)</span></label>
+      <div id="learned" class="hint" style="margin:6px 0 0;display:flex;flex-wrap:wrap;gap:6px">불러오는 중…</div>
+    </div>
     <div class="row">
       <button class="primary" id="saveSettings">저장하고 연결 확인</button>
     </div>
@@ -135,8 +142,8 @@ button.ghost{background:transparent;color:var(--muted);padding:8px 10px}
         <button type="button" id="attPlus" style="flex:none;width:44px;padding:10px 0">+</button>
         <span class="hint" style="margin:0">명</span>
       </div>
-      <input type="text" id="names" maxlength="300" style="margin-top:8px" placeholder="이름 (선택, 쉼표로) 예: 김민수, 이지은, 박정국, 최수리">
-      <div class="hint" style="margin-top:4px">이름을 적으면 자막·녹취에서 이름을 정확히 받아 적고, 요약에도 반영돼요. 사람 수만 적어도 돼요.</div>
+      <input type="text" id="names" maxlength="300" style="margin-top:8px" placeholder="이름·호칭 (선택) 예: 총무님, 부장님, 김민수  또는  1=총무님, 2=부장님">
+      <div class="hint" style="margin-top:4px">적어 둔 이름·호칭으로 AI가 누가 말했는지 맞춰 "참석자 1" 대신 이름으로 적어요. "1=총무님"처럼 번호를 붙이면 처음 말하는 사람이 1번이에요. 녹음 중에는 자막 탭에서 이름을 눌러 바로 바꿀 수 있고, 끝난 뒤엔 텔레그램에 "3=부장님"처럼 답장하면 고쳐서 다시 보내요.</div>
     </div>
     <div class="seg" id="modeSeg">
       <button data-mode="accurate">🎯 정확 모드<small>구분 정확 · 하루 2시간</small></button>
@@ -219,9 +226,31 @@ button.ghost{background:transparent;color:var(--muted);padding:8px 10px}
   var cfg = { url: store('mr_url') || '', pw: store('mr_pw') || '', vocab: store('mr_vocab') || '' };
 
   function showSettings(show) { $('settings').classList.toggle('hidden', !show); }
+  // 녹음하면서 서버가 배운 단어 (자막 힌트에도 씀)
+  var learnedWords = [];
+  function loadLearned() {
+    var box = $('learned');
+    api({ action: 'words' }).then(function (res) {
+      var ws = res.words || [];
+      learnedWords = ws.filter(function (w) { return w.used; }).map(function (w) { return w.w; });
+      if (!box) return;
+      box.innerHTML = '';
+      if (!ws.length) { box.textContent = '아직 없어요. 회의를 녹음할 때마다 이름·장소·용어를 스스로 모아요.'; return; }
+      ws.forEach(function (w) {
+        var c = document.createElement('span');
+        c.style.cssText = 'display:inline-flex;align-items:center;gap:4px;padding:3px 8px;border-radius:999px;border:1px solid var(--line);font-size:13px;' + (w.used ? 'color:var(--text)' : 'color:var(--muted)');
+        c.textContent = w.w + (w.n >= 99 ? ' 📌' : w.used ? '' : ' (1번)');
+        var x = document.createElement('button'); x.type = 'button'; x.textContent = '✕';
+        x.style.cssText = 'border:0;background:none;padding:0 2px;font-size:12px;color:var(--muted);cursor:pointer';
+        x.onclick = function () { api({ action: 'words', remove: w.w }).then(loadLearned); };
+        c.appendChild(x); box.appendChild(c);
+      });
+    }).catch(function () { if (box) box.textContent = '불러오지 못했어요.'; });
+  }
+  if (cfg.url) setTimeout(loadLearned, 1500);
   $('serverUrl').value = cfg.url; $('password').value = cfg.pw; $('vocab').value = cfg.vocab;
   if (!cfg.url || !cfg.pw) showSettings(true);
-  $('openSettings').onclick = function () { showSettings($('settings').classList.contains('hidden')); };
+  $('openSettings').onclick = function () { showSettings($('settings').classList.contains('hidden')); if (!$('settings').classList.contains('hidden')) loadLearned(); };
 
   $('saveSettings').onclick = function () {
     cfg.url = $('serverUrl').value.trim(); cfg.pw = $('password').value; cfg.vocab = $('vocab').value.trim();
@@ -613,7 +642,7 @@ button.ghost{background:transparent;color:var(--muted);padding:8px 10px}
   };
   function lvStart(r) {
     lvStop();
-    LV = { r: r, have: 0, sum: 0, timer: null, cap: null, capMode: false, caps: [], sent: 0, accText: '', accUntil: 0,
+    LV = { r: r, have: 0, sum: 0, timer: null, cap: null, capMode: false, caps: [], sent: 0, acc: [], spk: {}, accUntil: 0,
       sumAt: 0, sumBusy: false, sumLen: 0, syncIv: null };
     $('liveCard').classList.remove('hidden');
     var box = $('liveTr'); box.innerHTML = '';
@@ -646,7 +675,7 @@ button.ghost{background:transparent;color:var(--muted);padding:8px 10px}
     else $('liveInfo').textContent = '녹음을 마쳤어요. 정확한 녹취본(참석자 구분)과 요약을 만드는 중이에요. 텔레그램으로 와요.';
   }
   function vocabList() {
-    return (cfg.vocab || DEFAULT_VOCAB).split(/[,\n]/).concat(namesList()).map(function (w) { return w.trim(); }).filter(String);
+    return (cfg.vocab || DEFAULT_VOCAB).split(/[,\n]/).concat(namesList().map(plainName), learnedWords).map(function (w) { return w.trim(); }).filter(String);
   }
 
   // 자막 (브라우저 음성 인식). 몇십 초마다 저절로 끊기므로 녹음 중엔 바로 다시 켬. 끊기는 순간 들은 말도 버리지 않음
@@ -717,7 +746,7 @@ button.ghost{background:transparent;color:var(--muted);padding:8px 10px}
         el.appendChild(p.el);
       }
       var s = document.createElement('span'); s.textContent = (p.len ? ' ' : '') + (c.fx || c.x);
-      if (!c.done) s.className = 'raw';
+      s.className = 'cap' + (c.done ? '' : ' raw') + (c.user ? ' mine' : ''); s.setAttribute('data-c', me.caps.indexOf(c));
       p.el.appendChild(s); p.len += (c.fx || c.x).length;
     });
     if (me.cap && me.cap.interim && me.cap.interim.textContent) el.appendChild(me.cap.interim);
@@ -746,7 +775,7 @@ button.ghost{background:transparent;color:var(--muted);padding:8px 10px}
     var from = me.sent, to = Math.min(me.caps.length, from + 80);
     var lines = me.caps.slice(from, to).map(function (c) { return { i: c.i, x: c.x }; });
     var ctx = me.caps.slice(Math.max(0, from - 8), from).map(function (c) { return c.fx || c.x; }).join(' ');
-    var all = me.accText + me.caps.filter(function (c) { return c.t >= me.accUntil - 1; })
+    var all = accText(me) + me.caps.filter(function (c) { return c.t >= me.accUntil - 1; })
       .map(function (c) { return '[' + fmt(c.t) + '] ' + (c.fx || c.x); }).join('\n');
     if (!lines.length && (force ? all.length < 30 : true)) return;
     me.sumBusy = true; me.sumAt = now; me.sent = to;
@@ -754,7 +783,7 @@ button.ghost{background:transparent;color:var(--muted);padding:8px 10px}
     api({ action: 'livesum', lines: lines, ctx: ctx, all: all, vocab: cfg.vocab, names: namesStr(), attendees: attendees() }).then(function (res) {
       if (LV !== me) return;
       var byI = {}; (res.fixed || []).forEach(function (f) { byI[f.i] = f.x; });
-      for (var k = from; k < to; k++) { var c = me.caps[k]; if (c) { if (byI[c.i]) c.fx = byI[c.i]; c.done = true; } }
+      for (var k = from; k < to; k++) { var c = me.caps[k]; if (c) { if (byI[c.i] && !c.user) c.fx = byI[c.i]; c.done = true; } }
       capRender(me);
       if (res.summary) $('liveSum').textContent = res.summary + '\n\n(' + at + ' 기준 중간 요약)';
     }).catch(function () {
@@ -781,17 +810,22 @@ button.ghost{background:transparent;color:var(--muted);padding:8px 10px}
     var me = LV, box = $('liveTr');
     var atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 60;
     var d = document.createElement('div'); d.className = 'div ok';
-    d.textContent = '✓ 정확한 녹취 ' + fmt(seg.start) + (seg.dur ? '~' + fmt(seg.start + seg.dur) : '') + ' (참석자 번호는 이 구간 안에서만 맞음)';
+    d.textContent = '✓ 정확한 녹취 ' + fmt(seg.start) + (seg.dur ? '~' + fmt(seg.start + seg.dur) : '') + ' · 이름·내용을 누르면 고칠 수 있어요';
     me.accEl.appendChild(d);
     var prev = null;
-    seg.lines.forEach(function (l) {
-      me.accText += '[' + fmt(l.t) + '] 참석자' + l.s + ': ' + l.x + '\n';
-      if (prev && prev.s === l.s && l.t - prev.t < 20) { prev.el.appendChild(document.createTextNode(' ' + l.x)); return; }
+    seg.lines.forEach(function (l, j) {
+      var k = l.k === undefined ? j : l.k, key = seg.i + ':' + l.s;
+      if (l.n && !me.spk[key]) me.spk[key] = l.n;
+      var a = { seg: seg.i, s: l.s, t: l.t, x: l.x, k: k }; me.acc.push(a);
+      var sp = document.createElement('span'); sp.className = 'ed'; sp.setAttribute('data-a', me.acc.length - 1);
+      sp.textContent = l.x;
+      if (prev && prev.s === l.s && l.t - prev.t < 20) { prev.el.appendChild(document.createTextNode(' ')); prev.el.appendChild(sp); return; }
       var u = document.createElement('div'); u.className = 'u';
-      var b = document.createElement('b'); b.textContent = '참석자 ' + l.s;
+      var b = document.createElement('b'); b.className = 'who'; b.setAttribute('data-key', key);
+      b.textContent = me.spk[key] || ('참석자 ' + l.s);
       var sm = document.createElement('small'); sm.textContent = fmt(l.t);
       u.appendChild(b); u.appendChild(sm); u.appendChild(document.createElement('br'));
-      u.appendChild(document.createTextNode(l.x));
+      u.appendChild(sp);
       me.accEl.appendChild(u);
       prev = { s: l.s, t: l.t, el: u };
     });
@@ -802,6 +836,41 @@ button.ghost{background:transparent;color:var(--muted);padding:8px 10px}
     if (atBottom) box.scrollTop = box.scrollHeight;
     if (!me.sumAt) $('liveSum').textContent = '녹취가 들어왔어요. 중간 요약을 만드는 중… ("자막" 탭에서 바로 볼 수 있어요)';
   }
+  function accText(me) {
+    return me.acc.map(function (a) { return '[' + fmt(a.t) + '] ' + (me.spk[a.seg + ':' + a.s] || '참석자' + a.s) + ': ' + a.x; }).join('\n') + (me.acc.length ? '\n' : '');
+  }
+
+  // ── 녹음 중 직접 고치기: 이름(참석자 N) 누르기 → 이름 바꾸기, 글 누르기 → 내용 고치기 ──
+  $('liveTr').addEventListener('click', function (ev) {
+    var me = LV, el = ev.target; if (!me || !el || !el.getAttribute) return;
+    var id = me.r && me.r.meta && me.r.meta.liveJobId;
+    var late = function (res) { if (res && res.late) alert('이미 최종본을 만드는 중이라 서버에는 반영되지 않았어요.\n텔레그램에 "1=총무님"처럼 답장하면 최종본 이름을 바꿀 수 있어요.'); };
+    if (el.classList.contains('who')) {
+      var key = el.getAttribute('data-key'), p = key.split(':');
+      var cur = me.spk[key] || '';
+      var nm = prompt('이 사람을 뭐라고 부를까요? (예: 총무님, 김민수)\n한 구간에서만 바꿔도 최종 녹취본 전체에 반영돼요. 비우면 원래 번호로.', cur);
+      if (nm === null) return;
+      nm = nm.trim().slice(0, 20);
+      if (nm) me.spk[key] = nm; else delete me.spk[key];
+      [].forEach.call(document.querySelectorAll('#liveTr b.who[data-key="' + key + '"]'), function (b) { b.textContent = nm || ('참석자 ' + p[1]); });
+      if (id) api({ action: 'spkname', jobId: id, seg: Number(p[0]), s: Number(p[1]), name: nm }).then(late).catch(function () {});
+      if (nm && namesList().map(plainName).indexOf(nm) < 0) { $('names').value = namesList().concat(nm).join(', '); namesStr(); } // 다음 녹음에도 후보로
+      return;
+    }
+    if (el.classList.contains('ed')) {
+      var a = me.acc[Number(el.getAttribute('data-a'))]; if (!a) return;
+      var t = prompt('내용 고치기', a.x); if (t === null || !t.trim() || t.trim() === a.x) return;
+      a.x = t.trim(); el.textContent = a.x; el.classList.add('mine');
+      if (id) api({ action: 'edit', jobId: id, seg: a.seg, k: a.k, text: a.x }).then(late).catch(function () {});
+      return;
+    }
+    if (el.classList.contains('cap')) {
+      var c = me.caps[Number(el.getAttribute('data-c'))]; if (!c) return;
+      var t2 = prompt('자막 고치기 (중간 요약에 반영돼요)', c.fx || c.x); if (t2 === null || !t2.trim()) return;
+      c.fx = t2.trim(); c.user = true; c.done = true;
+      capRender(me);
+    }
+  });
 
   // 마이크 보호: 자막(음성 인식)이 마이크를 빼앗아 녹음이 끊기면(일부 아이폰) 자막을 끄고 마이크를 다시 잡아 녹음을 이어 감
   function guardTrack(r) {
@@ -838,6 +907,7 @@ button.ghost{background:transparent;color:var(--muted);padding:8px 10px}
     if (!(n > 0)) n = namesList().length; // 사람 수를 비우고 이름만 적었으면 이름 수
     return n > 0 ? n : 0;
   }
+  function plainName(s) { return String(s).replace(/^\s*(?:참석자|참가자)?\s*\d{1,2}\s*번?\s*(?:=|:|→|->)\s*/, '').trim(); }
   function namesList() { return ($('names').value || '').split(/[,，\n]/).map(function (s) { return s.trim(); }).filter(String); }
   function namesStr() { var s = namesList().join(', '); store('mr_names', s); return s; }
 
